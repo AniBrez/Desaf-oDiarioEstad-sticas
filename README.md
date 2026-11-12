@@ -132,7 +132,7 @@ The build is a folder of static files with relative paths, so it works anywhere,
 npm run build      # output in dist/
 ```
 
-A workflow is included ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)): it tests and builds on every push, and publishes to GitHub Pages when run by hand or on a push to `main`. To use it, enable Pages once in the repository settings (**Settings → Pages → Source: GitHub Actions**), then run the workflow from the **Actions** tab.
+A workflow is included ([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)): it runs the tests, builds, and publishes to GitHub Pages, when started by hand or on a push to `main`. To use it, enable Pages once in the repository settings (**Settings → Pages → Source: GitHub Actions**), then start it from the **Actions** tab (**Build and deploy → Run workflow**).
 
 The bookmarklet and the "Open in Desafío Diario" button point at wherever the app is being served from, so friends can use your deployment with their own data; nothing is shared between visitors.
 
