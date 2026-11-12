@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.cache/
+public/collector.js
+*.local
+.DS_Store
+coverage/
+test-results/
