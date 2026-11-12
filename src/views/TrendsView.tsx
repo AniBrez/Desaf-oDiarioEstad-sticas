@@ -9,7 +9,7 @@ import { countryStats } from '../stats/countries';
 import { fitBestTrend, linearTrend, mean, type TrendComparison, type TrendFit, type TrendKind } from '../stats/regression';
 import { fmtDate, fmtInt, fmtP, fmtPText, fmtSigned, plural } from '../util/format';
 import { navigate } from '../util/hooks';
-import { scoreAxis } from './shared';
+import { scoreAxis, scoreDomain } from './shared';
 
 const DAY_MS = 86400000;
 const MONTH_DAYS = 30.44;
@@ -78,7 +78,6 @@ export function TrendsView() {
   const firstN = Math.min(30, Math.floor(days.length / 2));
   const early = mean(days.slice(0, firstN).map((d) => d.total));
   const late = mean(days.slice(-firstN).map((d) => d.total));
-  const low = Math.min(...days.map((d) => d.total));
 
   const trending = countries.filter((c) => c.trend && c.n >= 12);
   const forest: ForestRow[] = [...trending]
@@ -142,7 +141,7 @@ export function TrendsView() {
             dots={[{ id: 'games', label: 'Score that day', color, points: days.map((d) => ({ t: d.t, v: d.total })) }]}
             lines={lines}
             band={{ label: '95% band', color, points: days.map((d, i) => ({ t: d.t, lo: fit.lo[i], hi: fit.hi[i] })) }}
-            yDomain={[Math.max(0, Math.floor(low / 5000) * 5000), 25000]}
+            yDomain={scoreDomain([...lines, { points: days.map((d) => ({ t: d.t, v: d.total })) }])}
             yFormat={scoreAxis}
             height={360}
           />

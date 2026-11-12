@@ -1,8 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import { ChartBlock, TimeChart, TooltipRow, type LineSeries } from '../charts/TimeChart';
-import { Card, Dot, Empty, Place, Segmented, StatTile } from '../components/ui';
+import { Card, DataTable, Dot, Empty, Place, Segmented, StatTile, type Column } from '../components/ui';
 import { playerColor, useApp } from '../data/store';
 import { WorldMap, type MapTarget } from '../map/WorldMap';
+import { countryName } from '../geo/geo';
 import { explore } from '../stats/explore';
 import { fmtDate, fmtInt, fmtPct, plural } from '../util/format';
 import { navigate } from '../util/hooks';
@@ -32,6 +33,7 @@ export function ExploredView() {
   const [level, setLevel] = useState<Level>('region');
   const [dots, setDots] = useState(true);
   const [paint, setPaint] = useState<Paint>('coverage');
+  const [showTable, setShowTable] = useState(false);
 
   const pooledCountries = useMemo(() => new Set(app.pooledRounds.map((r) => r.cc).filter((cc): cc is string => !!cc)), [app.pooledRounds]);
   const result = useMemo(() => (geo ? explore(focus.rounds, geo, pooledCountries) : null), [geo, focus.rounds, pooledCountries]);
@@ -102,6 +104,22 @@ export function ExploredView() {
     );
   }, [geo, result, lastSeen]);
 
+  interface Row { cc: string; count: number; seen: number; reachable: number; last: number }
+  const rows = useMemo<Row[]>(() => {
+    if (!geo || !result || !showTable) return [];
+    return [...result.countries.entries()].map(([cc, count]) => {
+      const regions = geo.countries.get(cc)?.regions ?? [];
+      const reachable = regions.filter((i) => geo.regions[i].cells > 0 || result.regions.has(i));
+      return { cc, count, seen: reachable.filter((i) => result.regions.has(i)).length, reachable: reachable.length, last: lastSeen.byCountry.get(cc) ?? 0 };
+    });
+  }, [geo, result, showTable, lastSeen]);
+  const columns: Column<Row>[] = [
+    { key: 'name', header: 'Country', sort: (r) => countryName(r.cc), render: (r) => <Place cc={r.cc} /> },
+    { key: 'count', header: 'Times dropped here', align: 'right', sort: (r) => r.count, render: (r) => fmtInt(r.count) },
+    { key: 'regions', header: 'Regions seen', align: 'right', sort: (r) => (r.reachable ? r.seen / r.reachable : null), render: (r) => `${r.seen} of ${r.reachable}` },
+    { key: 'last', header: 'Last time', align: 'right', sort: (r) => r.last, render: (r) => fmtDate(r.last) },
+  ];
+
   if (!geo || !result || !classes) return <Card><Empty title={app.geoError ? 'The map data could not be loaded' : 'Loading map data…'} /></Card>;
 
   const { totals } = result;
@@ -150,6 +168,14 @@ export function ExploredView() {
           <span className="swatch"><i style={{ background: 'var(--map-land)' }} />No Street View</span>
           {dots && <span className="swatch"><Dot color="var(--map-point)" />A round</span>}
         </div>
+        <div className="row" style={{ marginTop: 10 }}>
+          <button type="button" className="btn quiet small" aria-pressed={showTable} onClick={() => setShowTable((v) => !v)}>{showTable ? 'Hide table' : 'Show as table'}</button>
+        </div>
+        {showTable && (
+          <div style={{ marginTop: 8 }}>
+            <DataTable rows={rows} columns={columns} rowKey={(r) => r.cc} initialSort={{ key: 'count', dir: 'desc' }} onRowClick={(r) => navigate('countries', { country: r.cc })} capped caption="Countries you have been dropped in" />
+          </div>
+        )}
       </Card>
 
       <div className="grid side">

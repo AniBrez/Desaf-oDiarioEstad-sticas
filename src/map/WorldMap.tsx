@@ -252,8 +252,9 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
 
     // Screen-space layers: dots and markers keep their size whatever the zoom.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const markerBelow = Math.min(7, s * 0.005);
     for (const c of geometry.countries) {
-      if (c.size * s >= 7) continue;
+      if (c.size * s >= markerBelow) continue;
       const cls = classes[c.region] ?? -1;
       const px = c.x * s + ox, py = c.y * s + oy;
       if (px < -6 || py < -6 || px > width + 6 || py > height + 6) continue;
@@ -266,7 +267,8 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
       ctx.stroke();
     }
     if (points && points.length > 0) {
-      const r = v.k >= 6 ? 3.2 : v.k >= 2.5 ? 2.6 : 2;
+      // Dots stay small on small maps, or a few thousand of them would hide everything else.
+      const r = v.k >= 6 ? 3.2 : v.k >= 2.5 ? 2.6 : Math.max(0.9, Math.min(2, s / 520));
       ctx.fillStyle = chrome['--map-point'];
       ctx.strokeStyle = chrome['--map-point-ring'];
       ctx.lineWidth = 0.75;
@@ -297,8 +299,9 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
     const v = view.current;
     const s = scale();
     const ox = width / 2 - v.cx * s, oy = height / 2 - v.cy * s;
+    const markerBelow = Math.min(7, s * 0.005);
     for (const c of geometry.countries) {
-      if (c.size * s >= 7) continue;
+      if (c.size * s >= markerBelow) continue;
       const dx = c.x * s + ox - px, dy = c.y * s + oy - py;
       if (dx * dx + dy * dy <= 81) return { kind: level, regionIdx: c.region, cc: c.cc };
     }

@@ -1,11 +1,11 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState, useTransition } from 'react';
 import { BarList } from '../charts/Charts';
 import { TooltipRow } from '../charts/TimeChart';
 import { Card, DataTable, Empty, niceClassScale, Place, ScaleLegend, Segmented, type ClassScale, type Column } from '../components/ui';
 import { useApp } from '../data/store';
 import { countryName } from '../geo/geo';
 import { WorldMap, type MapTarget } from '../map/WorldMap';
-import type { Estimate } from '../stats/probability';
+import { distanceForScore, type Estimate } from '../stats/probability';
 import { fmtInt, fmtKm, fmtPct, plural } from '../util/format';
 import { navigate } from '../util/hooks';
 import { useProbabilityModel } from './useModel';
@@ -41,6 +41,9 @@ export function OddsMapView() {
   const [paint, setPaint] = useState<Paint>('coverage');
   const [showTable, setShowTable] = useState(false);
   const threshold = app.settings.threshold;
+  // The slider moves at once; the refit it triggers is allowed to lag a frame or two behind.
+  const [slider, setSlider] = useState(threshold);
+  const [, startTransition] = useTransition();
 
   const estimateFor = useCallback((regionIdx: number, at: Level): Estimate | null => {
     if (!model || !geo) return null;
@@ -149,8 +152,12 @@ export function OddsMapView() {
           <Segmented<Level> label="Detail" value={level} onChange={setLevel} options={[{ value: 'region', label: 'Regions' }, { value: 'country', label: 'Countries' }]} />
           <label className="filter" style={{ gap: 10 }}>
             <span className="filter-label">A good round is</span>
-            <input className="range" type="range" min={2500} max={4900} step={100} value={threshold} onChange={(e) => app.setThreshold(Number(e.target.value))} aria-label="Score that counts as a good round" />
-            <span className="num" style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{fmtInt(threshold)}+ <span className="muted" style={{ fontWeight: 400 }}>(within {fmtKm(model.thresholdKm)})</span></span>
+            <input
+              className="range" type="range" min={2500} max={4900} step={100} value={slider}
+              onChange={(e) => { const v = Number(e.target.value); setSlider(v); startTransition(() => app.setThreshold(v)); }}
+              aria-label="Score that counts as a good round"
+            />
+            <span className="num" style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{fmtInt(slider)}+ <span className="muted" style={{ fontWeight: 400 }}>(within {fmtKm(distanceForScore(slider, geo.meta.scoreScaleKm))})</span></span>
           </label>
           <div className="filter">
             <span className="filter-label">Colour</span>

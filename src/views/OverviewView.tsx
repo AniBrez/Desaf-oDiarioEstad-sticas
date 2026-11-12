@@ -7,7 +7,7 @@ import { scoreByRoundNumber } from '../stats/countries';
 import { streaks } from '../stats/leaderboard';
 import { fitBestTrend, mean, median } from '../stats/regression';
 import { fmtDate, fmtDuration, fmtInt, fmtPct, plural } from '../util/format';
-import { RoundCells, rollingLine, rollingPoints, rollingWindow, scoreAxis } from './shared';
+import { RoundCells, rollingLine, rollingPoints, rollingWindow, scoreAxis, scoreDomain } from './shared';
 
 const DAY_MS = 86400000;
 
@@ -43,8 +43,7 @@ export function OverviewView() {
     const first = days[0]?.t ?? 0;
     const trend = fitBestTrend(days.map((d) => ({ days: (d.t - first) / DAY_MS, value: d.total })));
     if (trend) lines.push({ id: 'trend', label: 'Trend', color: 'var(--ink-2)', dashed: true, width: 1.5, points: days.map((d, i) => ({ t: d.t, v: trend.best.fitted[i] })) });
-    const low = Math.min(...days.map((d) => d.total));
-    return { lines, trend, yDomain: [Math.max(0, Math.floor(low / 5000) * 5000), 25000] as [number, number] };
+    return { lines, trend, yDomain: scoreDomain([...lines, { points: days.map((d) => ({ t: d.t, v: d.total })) }]) };
   }, [focus, app.compare, days, window]);
 
   const legend: LegendItem[] = [
@@ -109,6 +108,7 @@ export function OverviewView() {
         <Card title="How your scores are spread" subtitle="Number of games by total score, in bands of 1,000 points.">
           <Columns
             ariaLabel="Histogram of total scores"
+            counts
             data={histogram.map((b) => ({
               key: String(b.from),
               label: b.from % 5000 === 0 ? scoreAxis(b.from) : '',

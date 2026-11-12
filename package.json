@@ -16,7 +16,6 @@
     "mock:geoguessr": "node scripts/run-ts.mjs scripts/mock-geoguessr.ts"
   },
   "dependencies": {
-    "d3-array": "^3.2.4",
     "d3-scale": "^4.0.2",
     "d3-shape": "^3.2.0",
     "idb-keyval": "^6.2.1",
@@ -25,7 +24,6 @@
     "topojson-client": "^3.1.0"
   },
   "devDependencies": {
-    "@types/d3-array": "^3.2.1",
     "@types/d3-scale": "^4.0.8",
     "@types/d3-shape": "^3.1.6",
     "@types/node": "^22.0.0",
@@ -34,7 +32,6 @@
     "@types/topojson-client": "^3.1.5",
     "@types/topojson-specification": "^1.0.5",
     "@vitejs/plugin-react": "^6.0.0",
-    "d3-geo": "^3.1.1",
     "esbuild": "^0.28.0",
     "topojson-server": "^3.0.1",
     "topojson-simplify": "^3.0.3",

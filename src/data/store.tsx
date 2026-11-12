@@ -98,13 +98,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [geoError, setGeoError] = useState<string | null>(null);
   const [settings, setSettings] = useStoredState<Settings>('desafio-diario:settings:v1', DEFAULT_SETTINGS, isSettings);
   const datasetRef = useRef(dataset);
-  datasetRef.current = dataset;
+
+  // Several changes can happen in one event (drop the demo players, then import a file), so the
+  // latest dataset is kept in a ref and every change goes through `commit`.
+  const commit = useCallback((next: Dataset) => {
+    datasetRef.current = next;
+    setDataset(next);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     get<Dataset>(DATASET_KEY)
       .then((saved) => {
-        if (!cancelled && saved && typeof saved === 'object' && saved.players && saved.challenges) setDataset(saved);
+        if (!cancelled && saved && typeof saved === 'object' && saved.players && saved.challenges) commit(saved);
       })
       .catch(() => { /* private mode or blocked storage: start empty */ })
       .finally(() => { if (!cancelled) setReady(true); });
@@ -112,7 +118,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!cancelled) setGeoError(err instanceof Error ? err.message : 'The map data could not be loaded.');
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [commit]);
 
   // Persist after changes (not before the saved copy has been read).
   useEffect(() => {
@@ -153,10 +159,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const importFile = useCallback((file: ExportFile): MergeSummary => {
     const { dataset: next, summary } = mergeExport(datasetRef.current, file);
-    datasetRef.current = next;
-    setDataset(next);
+    commit(next);
     return summary;
-  }, []);
+  }, [commit]);
 
   const value = useMemo<AppData>(() => ({
     ready,
@@ -175,13 +180,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     removeDemo() {
       let next = datasetRef.current;
       for (const p of Object.values(next.players)) if (p.demo) next = removePlayerFrom(next, p.id);
-      setDataset(next);
+      commit(next);
     },
     removePlayer(id) {
-      setDataset(removePlayerFrom(datasetRef.current, id));
+      commit(removePlayerFrom(datasetRef.current, id));
     },
     clearAll() {
-      setDataset(emptyDataset());
+      commit(emptyDataset());
       setSettings(DEFAULT_SETTINGS);
     },
     setFocus(id) {
@@ -198,7 +203,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setThreshold(threshold) {
       setSettings({ ...settings, threshold });
     },
-  }), [ready, dataset, geo, geoError, bundle, settings, focusId, range, derived, importFile, setSettings]);
+  }), [ready, dataset, geo, geoError, bundle, settings, focusId, range, derived, importFile, commit, setSettings]);
 
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

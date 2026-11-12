@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 import { scaleLinear, scaleUtc } from 'd3-scale';
 import { line as d3Line } from 'd3-shape';
 import { fmtCompact, fmtDate, fmtInt } from '../util/format';
@@ -81,6 +81,7 @@ function tickLabel(d: Date): string {
 export function TimeChart({ lines, dots = [], band, yDomain, yFormat = fmtCompact, valueFormat = fmtInt, height = 320, ariaLabel, onPick, endLabels = false }: TimeChartProps) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
+  const clipId = useId();
 
   const model = useMemo(() => {
     const xs = new Set<number>();
@@ -120,7 +121,8 @@ export function TimeChart({ lines, dots = [], band, yDomain, yFormat = fmtCompac
 
   if (!hasData) return <div ref={ref} className="chart" style={{ height }} />;
 
-  const xTicks = x.ticks(Math.max(2, Math.min(10, Math.floor(innerW / 84))));
+  // On spans of a few days d3 offers sub-day ticks; a daily series only wants whole days.
+  const xTicks = x.ticks(Math.max(2, Math.min(10, Math.floor(innerW / 84)))).filter((d) => d.getUTCHours() === 0 && d.getUTCMinutes() === 0);
   const yTicks = y.ticks(5);
   const hoverT = hover !== null ? model.xs[hover] : null;
 
@@ -162,24 +164,27 @@ export function TimeChart({ lines, dots = [], band, yDomain, yFormat = fmtCompac
               <text key={tick.getTime()} x={x(tick)} y={innerH + 18} textAnchor="middle">{tickLabel(tick)}</text>
             ))}
 
-            {bandPath && <path d={bandPath} fill={band!.color} opacity={0.14} />}
-            {dots.map((s) => (
-              <g key={s.id} fill={s.color} opacity={0.38}>
-                {s.points.map((p, i) => <circle key={i} cx={x(p.t)} cy={y(p.v)} r={2.4} />)}
-              </g>
-            ))}
-            {lines.map((s) => (
-              <path
-                key={s.id}
-                d={path(s.points) ?? undefined}
-                fill="none"
-                stroke={s.color}
-                strokeWidth={s.width ?? 2}
-                strokeLinejoin="round"
-                strokeLinecap="round"
-                strokeDasharray={s.dashed ? '5 4' : undefined}
-              />
-            ))}
+            <clipPath id={clipId}><rect x={-3} y={-3} width={innerW + 6} height={innerH + 6} /></clipPath>
+            <g clipPath={`url(#${clipId})`}>
+              {bandPath && <path d={bandPath} fill={band!.color} opacity={0.14} />}
+              {dots.map((s) => (
+                <g key={s.id} fill={s.color} opacity={0.38}>
+                  {s.points.map((p, i) => <circle key={i} cx={x(p.t)} cy={y(p.v)} r={2.4} />)}
+                </g>
+              ))}
+              {lines.map((s) => (
+                <path
+                  key={s.id}
+                  d={path(s.points) ?? undefined}
+                  fill="none"
+                  stroke={s.color}
+                  strokeWidth={s.width ?? 2}
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  strokeDasharray={s.dashed ? '5 4' : undefined}
+                />
+              ))}
+            </g>
             {!collide && ends.map(({ s, x: ex, y: ey }) => (
               <g key={s.id}>
                 <circle cx={ex} cy={ey} r={4} fill={s.color} stroke="var(--surface)" strokeWidth={2} />

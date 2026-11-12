@@ -204,7 +204,7 @@ button, input, select { font: inherit; color: inherit; }
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
 }
-.filter { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.filter { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .filter > label, .filter > .filter-label { font-size: 12px; color: var(--muted); font-weight: 500; white-space: nowrap; }
 .demo-banner {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
@@ -385,14 +385,12 @@ details.explain ul { padding-left: 20px; }
 }
 .map-hint.show { opacity: 1; }
 .scale-legend { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--ink-2); margin-top: 10px; }
-.scale-steps { display: inline-flex; align-items: flex-end; }
-.scale-step { display: inline-flex; flex-direction: column; align-items: flex-start; }
-.scale-step i { display: block; width: 44px; height: 10px; }
-.scale-step:first-child i { border-radius: 3px 0 0 3px; }
-.scale-step:last-of-type i { border-radius: 0 3px 3px 0; }
-.scale-step span { margin-top: 3px; font-variant-numeric: tabular-nums; transform: translateX(-50%); white-space: nowrap; }
-.scale-step:first-child span { transform: none; }
-.scale-end { align-self: flex-end; transform: translateX(-100%); margin-left: 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.scale-steps { display: inline-flex; flex-direction: column; padding: 0 18px; }
+.scale-bar { display: flex; border-radius: 3px; overflow: hidden; }
+.scale-bar i { display: block; width: 46px; height: 10px; }
+/* One label per class boundary, centred on it. */
+.scale-ticks { display: flex; justify-content: space-between; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.scale-ticks span { width: 0; display: flex; justify-content: center; white-space: nowrap; }
 .swatch { display: inline-flex; align-items: center; gap: 6px; }
 .swatch i { width: 14px; height: 10px; border-radius: 3px; display: inline-block; border: 1px solid var(--border); }
 
@@ -431,6 +429,7 @@ code.inline { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
 @media (max-width: 560px) {
+  .scale-bar i { width: 36px; }
   .shell { padding: 0 16px 40px; }
   .tabs, .filters { margin-left: -16px; margin-right: -16px; padding-left: 16px; padding-right: 16px; }
   .tile-value { font-size: 22px; }

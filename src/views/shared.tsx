@@ -44,5 +44,13 @@ export function rollingLine(series: PlayerSeries, window: number, suffix = ''): 
   return { id: `roll-${series.player.id}`, label: `${series.player.nick}${suffix}`, color: playerColor(series.player), points: rollingPoints(series.days, window) };
 }
 
+/** Total-score axis from the lowest value drawn (rounded down to 5,000) up to the maximum of 25,000. */
+export function scoreDomain(series: { points: ChartPoint[] }[]): [number, number] {
+  let low = 25000;
+  for (const s of series) for (const p of s.points) if (p.v < low) low = p.v;
+  const floor = Math.max(0, Math.floor(low / 5000) * 5000);
+  return [Math.min(floor, 20000), 25000];
+}
+
 /** Axis labels for total scores (an axis that reaches 10,000 is compact throughout: 0 / 5K / 10K). */
 export const scoreAxis = (v: number): string => (v === 0 ? '0' : `${Number.isInteger(v / 1000) ? v / 1000 : (v / 1000).toFixed(1)}K`);

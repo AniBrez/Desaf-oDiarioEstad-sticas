@@ -223,13 +223,12 @@ export function ScaleLegend({ scale, format, title, extras }: { scale: ClassScal
     <div className="scale-legend">
       <span>{title}</span>
       <span className="scale-steps" role="img" aria-label={`${title}: from ${format(scale.breaks[0])} (lightest) to ${format(scale.breaks[n])} (strongest)`}>
-        {scale.colors.map((color, i) => (
-          <span className="scale-step" key={i}>
-            <i style={{ background: SEQUENTIAL[color] }} />
-            <span>{format(scale.breaks[i])}</span>
-          </span>
-        ))}
-        <span className="scale-end">{format(scale.breaks[n])}</span>
+        <span className="scale-bar">
+          {scale.colors.map((color, i) => <i key={i} style={{ background: SEQUENTIAL[color] }} />)}
+        </span>
+        <span className="scale-ticks">
+          {scale.breaks.map((b, i) => <span key={i}>{format(b)}</span>)}
+        </span>
       </span>
       {extras?.map((e) => (
         <span className="swatch" key={e.label}><i style={{ background: e.color }} />{e.label}</span>

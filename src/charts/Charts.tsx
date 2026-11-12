@@ -146,7 +146,7 @@ export interface ColumnDatum {
   tooltip: ReactNode;
 }
 
-export function Columns({ data, height = 200, format = fmtInt, ariaLabel, yMax }: { data: ColumnDatum[]; height?: number; format?: (v: number) => string; ariaLabel: string; yMax?: number }) {
+export function Columns({ data, height = 200, format = fmtInt, ariaLabel, yMax, counts }: { data: ColumnDatum[]; height?: number; format?: (v: number) => string; ariaLabel: string; yMax?: number; /** Values are counts: only whole-number ticks. */ counts?: boolean }) {
   const [ref, width] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
   const margin = { top: 10, right: 8, bottom: 26, left: 44 };
@@ -161,7 +161,7 @@ export function Columns({ data, height = 200, format = fmtInt, ariaLabel, yMax }
       {width > 0 && (
         <svg width={width} height={height} role="img" aria-label={ariaLabel}>
           <g transform={`translate(${margin.left},${margin.top})`}>
-            {y.ticks(4).map((t) => (
+            {y.ticks(4).filter((t) => !counts || Number.isInteger(t)).map((t) => (
               <g key={t} transform={`translate(0,${y(t)})`}>
                 <line className="grid-line" x1={0} x2={innerW} />
                 <text x={-8} dy="0.32em" textAnchor="end">{format(t)}</text>
