@@ -152,7 +152,13 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
   const frame = useRef(0);
   const [hover, setHover] = useState<{ target: MapTarget; x: number; y: number } | null>(null);
   const [dragging, setDragging] = useState(false);
-  const [hint, setHint] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+  const hintTimer = useRef(0);
+  const showHint = useCallback((text: string) => {
+    setHint(text);
+    window.clearTimeout(hintTimer.current);
+    hintTimer.current = window.setTimeout(() => setHint(null), 1600);
+  }, []);
   const themeVersion = useThemeVersion();
   const geometry = useMemo(() => getGeometry(geo), [geo]);
   const height = Math.round(Math.max(240, Math.min(640, width * ASPECT)));
@@ -325,12 +331,9 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    let hintTimer = 0;
     const onWheel = (event: WheelEvent) => {
       if (!event.ctrlKey && !event.metaKey) {
-        setHint(true);
-        window.clearTimeout(hintTimer);
-        hintTimer = window.setTimeout(() => setHint(false), 1400);
+        showHint(`Hold ${isMac ? '⌘' : 'Ctrl'} and scroll to zoom`);
         return;
       }
       event.preventDefault();
@@ -338,8 +341,8 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
       zoomAt(Math.exp(-event.deltaY * (event.deltaMode === 1 ? 0.05 : 0.0035)), event.clientX - box.left, event.clientY - box.top);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
-    return () => { el.removeEventListener('wheel', onWheel); window.clearTimeout(hintTimer); };
-  }, [containerRef, zoomAt]);
+    return () => { el.removeEventListener('wheel', onWheel); window.clearTimeout(hintTimer.current); };
+  }, [containerRef, zoomAt, showHint]);
 
   // ---- Pointer: drag to pan, two fingers to pinch, hover/tap for the tooltip -----------------
   const pointers = useRef(new Map<number, { x: number; y: number }>());
@@ -391,7 +394,14 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
       }
       return;
     }
-    if (prev) { pointers.current.set(event.pointerId, p); return; }
+    if (prev) {
+      // One finger is left to the page for scrolling; say how to move the map instead.
+      if (Math.abs(p.x - prev.x) > 14 && Math.abs(p.x - prev.x) > Math.abs(p.y - prev.y)) {
+        gesture.current.moved = true;
+        showHint('Use two fingers to move the map');
+      }
+      return;
+    }
     const target = targetAt(p.x, p.y);
     setHover((h) => {
       if (!target) return h ? null : h;
@@ -458,7 +468,7 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
         <button type="button" aria-label="Zoom out" onClick={() => zoomAt(1 / 1.8)}>−</button>
         <button type="button" aria-label="Show the whole world" onClick={() => { view.current = { ...HOME }; clampView(); schedule(); }}>⤢</button>
       </div>
-      <div className={`map-hint${hint ? ' show' : ''}`} aria-hidden="true">Hold {isMac ? '⌘' : 'Ctrl'} and scroll to zoom</div>
+      <div className={`map-hint${hint ? ' show' : ''}`} aria-hidden="true">{hint ?? '\u00a0'}</div>
       {hover && content && (
         <div
           className="tooltip"

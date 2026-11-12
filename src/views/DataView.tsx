@@ -176,7 +176,7 @@ export function DataView() {
             <div>
               <h3>Send the result here</h3>
               <p>
-                A panel in the corner shows progress: a first run takes a few minutes for a long history (roughly two requests per game); later runs only fetch what is new.
+                A panel in the corner shows progress: a first run takes a few minutes for a long history (one or two requests per game); later runs only fetch what is new.
                 When it finishes, choose "Open in Desafío Diario" to bring the data straight here, or download the file and drop it below.
               </p>
             </div>

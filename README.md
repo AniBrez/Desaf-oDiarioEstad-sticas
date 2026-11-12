@@ -43,7 +43,7 @@ GeoGuessr has no export and no public API, and a web page on another site cannot
 3. Go to [geoguessr.com](https://www.geoguessr.com/), signed in, and click the bookmark (or paste the script into the browser console).
 4. A panel in the corner shows progress. When it finishes, choose **Open in Desafío Diario** (the data arrives in the app, which asks you to confirm) or **Download file** and drop the file into the app.
 
-The first run needs roughly two requests per game, about seven a second: a few minutes for a history of several years. The collector remembers what it has fetched (in your browser's storage for geoguessr.com), so later runs only fetch new days; in a test, a repeat run took 12 requests.
+The first run needs one or two requests per game, about seven a second: a few minutes for a history of several years. The collector remembers what it has fetched (in your browser's storage for geoguessr.com), so later runs only fetch new days; in a test, a repeat run took 12 requests.
 
 What the collector does and does not do:
 
