@@ -73,6 +73,8 @@ export interface Geo {
   locate(lat: number, lng: number, ccHint?: string | null): number;
   /** Country containing a point, or null (open sea). */
   locateCountry(lat: number, lng: number): string | null;
+  /** Region whose outline contains a point given in normalised Mercator coordinates, or -1 (no snapping). */
+  regionAt(x: number, y: number): number;
   isCovered(lat: number, lng: number): boolean;
   /** Index of the coverage cell a point falls in at a coarser resolution (multiples of the grid). */
   coarseCell(lat: number, lng: number, factor: number): number;
@@ -264,6 +266,11 @@ export function buildGeo(topology: Topology, coverage: CoverageFile, gridBits: U
     locateCountry(lat, lng) {
       const idx = locate(lat, lng);
       return idx >= 0 ? regions[idx].cc : null;
+    },
+    regionAt(x, y) {
+      if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return -1;
+      for (const idx of buckets[cellOf(y) * INDEX_SIZE + cellOf(x)]) if (regionContains(regions[idx], x, y)) return idx;
+      return -1;
     },
     isCovered(lat, lng) {
       const cell = cellIndex(lat, lng);

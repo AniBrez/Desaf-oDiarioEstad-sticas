@@ -194,7 +194,7 @@ export function runCollectorUi(): void {
     const url = URL.createObjectURL(blob);
     const a = el('a');
     a.href = url;
-    const nick = file.owner.nick.replace(/[^\w-]+/g, '_').slice(0, 40) || 'player';
+    const nick = file.owner.nick.replace(/[^\w-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'player';
     a.download = `desafio-diario-${nick}-${file.exportedAt.slice(0, 10)}.json`;
     root.append(a);
     a.click();
@@ -220,7 +220,7 @@ export function runCollectorUi(): void {
         appWindow?.postMessage({ type: EXPORT, file }, target.origin);
         note.textContent = 'Sent. Confirm the import in the app tab.';
       } else if (type === RECEIVED) {
-        note.textContent = 'Imported. You can close this panel.';
+        note.textContent = 'The app has your data. Confirm the import there; then you can close this panel.';
       }
     };
     window.addEventListener('message', onMessage);

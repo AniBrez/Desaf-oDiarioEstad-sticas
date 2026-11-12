@@ -57,7 +57,7 @@ describe('learning curves', () => {
     expect(comparison.best.params.tau).toBeLessThan(110);
     expect(comparison.best.pValue).toBeLessThan(1e-6);
     // The band contains the true curve almost everywhere.
-    const inside = obs.filter((o, i) => {
+    const inside = obs.filter((_, i) => {
       const truth = 20000 - 6000 * Math.exp(-i / 60);
       return truth >= comparison.best.lo[i] - 150 && truth <= comparison.best.hi[i] + 150;
     }).length;

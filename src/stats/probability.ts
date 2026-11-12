@@ -55,9 +55,9 @@ export interface Estimate {
   good: number;
   /** Estimated probability of a good round. */
   p: number;
-  /** 80% credible interval. */
-  lo: number;
-  hi: number;
+  /** 80% credible interval (computed on first use). */
+  readonly lo: number;
+  readonly hi: number;
   /** What the model expected before looking at this place's own rounds. */
   prior: number;
   /** Estimated expected round score. */
@@ -82,7 +82,13 @@ export interface ModelOutput {
   strength: { country: number; region: number };
 }
 
-const STRENGTH_GRID = [1, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 200];
+/**
+ * Candidate prior strengths, in "rounds of evidence". The caps are deliberate: however well the
+ * coverage-based prior fits on average, it should never outweigh more than a couple of dozen real
+ * rounds in a country, or a dozen in a region - players have blind spots no prior can know about.
+ */
+const COUNTRY_STRENGTHS = [1, 1.5, 2, 3, 4, 6, 8, 12, 16];
+const REGION_STRENGTHS = [1, 1.5, 2, 3, 4, 6, 8, 12];
 const MIN_ROUNDS_FOR_REGRESSION = 40;
 
 /** Distance in km at which a guess is worth exactly `score` points. */
@@ -113,11 +119,11 @@ export function geometricScore(dq: number[], scoreScaleKm: number): number {
 }
 
 /** Marginal-likelihood estimate of a Beta prior's strength, given prior means and outcomes. */
-function estimateStrength(units: { n: number; good: number; prior: number }[], fallback: number, minUnits: number): number {
+function estimateStrength(units: { n: number; good: number; prior: number }[], grid: number[], fallback: number, minUnits: number): number {
   const withData = units.filter((u) => u.n > 0);
   if (withData.length < minUnits) return fallback;
   let best = fallback, bestLl = -Infinity;
-  for (const k of STRENGTH_GRID) {
+  for (const k of grid) {
     let ll = 0;
     for (const u of withData) {
       const a = k * u.prior, b = k * (1 - u.prior);
@@ -250,15 +256,19 @@ export function fitProbabilityModel(input: ModelInput): ModelOutput {
     countryState.set(cc, { cc, prior: clamp(prior, 0.01, 0.99), priorScore: ps, tally: countryTally.get(cc) ?? emptyTally() });
   }
   const countryStrength = estimateStrength(
-    [...countryState.values()].map((c) => ({ n: c.tally.n, good: c.tally.good, prior: c.prior })), 8, 8);
+    [...countryState.values()].map((c) => ({ n: c.tally.n, good: c.tally.good, prior: c.prior })), COUNTRY_STRENGTHS, 6, 8);
 
   const posterior = (n: number, good: number, sum: number, prior: number, priorMean: number, k: number, share: number): Estimate => {
     const a = good + k * prior, b = n - good + k * (1 - prior);
+    // The interval needs two Beta quantiles; with thousands of regions they are only worth
+    // computing for the few that are actually looked at.
+    let interval: [number, number] | null = null;
+    const bounds = () => (interval ??= [betaQuantile(0.1, a, b), betaQuantile(0.9, a, b)]);
     return {
       n, good,
       p: a / (a + b),
-      lo: betaQuantile(0.1, a, b),
-      hi: betaQuantile(0.9, a, b),
+      get lo() { return bounds()[0]; },
+      get hi() { return bounds()[1]; },
       prior,
       expected: clamp((sum + k * priorMean) / (n + k), 0, 5000),
       meanScore: n > 0 ? sum / n : null,
@@ -293,7 +303,7 @@ export function fitProbabilityModel(input: ModelInput): ModelOutput {
   };
   const priors = regions.map((_, i) => regionPrior(i));
   const regionStrength = estimateStrength(
-    regions.map((_, i) => ({ n: regionTally[i].n, good: regionTally[i].good, prior: priors[i].p })), 5, 20);
+    regions.map((_, i) => ({ n: regionTally[i].n, good: regionTally[i].good, prior: priors[i].p })), REGION_STRENGTHS, 4, 20);
 
   const regionEstimates = regions.map((r, i): Estimate | null => {
     const t = regionTally[i];

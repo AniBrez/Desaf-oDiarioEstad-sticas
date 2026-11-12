@@ -13,7 +13,7 @@
     "test:watch": "vitest",
     "build:collector": "node scripts/build-collector.mjs",
     "build:geodata": "node scripts/build-geodata.mjs",
-    "mock:geoguessr": "node scripts/mock-geoguessr.mjs"
+    "mock:geoguessr": "node scripts/run-ts.mjs scripts/mock-geoguessr.ts"
   },
   "dependencies": {
     "d3-array": "^3.2.4",
