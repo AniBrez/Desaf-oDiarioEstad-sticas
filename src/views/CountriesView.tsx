@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { ChartBlock, TimeChart, type LegendItem, type LineSeries } from '../charts/TimeChart';
 import { Card, DataTable, Empty, Place, StatTile, type Column } from '../components/ui';
+import { Tiles } from '../export/ExportKit';
 import { playerColor, useApp } from '../data/store';
 import type { RoundRow } from '../data/types';
 import { countryName } from '../geo/geo';
@@ -47,22 +48,33 @@ export function CountriesView({ country }: { country: string | null }) {
 
   const columns: Column<CountryStat>[] = [
     { key: 'name', header: 'Country', sort: (s) => countryName(s.cc), render: (s) => <Place cc={s.cc} /> },
+    { key: 'code', header: 'Code', csv: (s) => s.cc, render: () => null },
     { key: 'n', header: 'Rounds', align: 'right', sort: (s) => s.n, render: (s) => fmtInt(s.n) },
     {
-      key: 'mean', header: 'Average score', align: 'right', sort: (s) => s.meanScore,
+      key: 'mean', header: 'Average score', align: 'right', sort: (s) => s.meanScore, csv: (s) => Math.round(s.meanScore),
       render: (s) => <><span className="cell-bar" style={{ width: `${(64 * s.meanScore) / maxMean}px` }} />{fmtInt(s.meanScore)}</>,
     },
-    { key: 'good', header: `Good rounds (${fmtInt(app.settings.threshold)}+)`, align: 'right', sort: (s) => s.goodRate, render: (s) => fmtPct(s.goodRate) },
-    { key: 'hit', header: 'Right country', align: 'right', title: 'Share of rounds where your guess landed in the right country', sort: (s) => s.hitRate, render: (s) => (s.hitRate === null ? '–' : fmtPct(s.hitRate)) },
-    { key: 'mix', header: 'Often guessed instead', sort: (s) => (s.mixedUpWith ? s.mixedUpWith.count : null), render: (s) => (s.mixedUpWith ? <span className="place"><Place cc={s.mixedUpWith.cc} /><span className="muted">×{s.mixedUpWith.count}</span></span> : <span className="muted">–</span>) },
+    { key: 'median', header: 'Median score', csv: (s) => s.medianScore, render: () => null },
+    { key: 'good', header: `Good rounds (${fmtInt(app.settings.threshold)}+)`, csvHeader: `Good rounds ${app.settings.threshold}+ (%)`, align: 'right', sort: (s) => s.goodRate, csv: (s) => +(100 * s.goodRate).toFixed(1), render: (s) => fmtPct(s.goodRate) },
+    { key: 'hit', header: 'Right country', csvHeader: 'Right country (%)', align: 'right', title: 'Share of rounds where your guess landed in the right country', sort: (s) => s.hitRate, csv: (s) => (s.hitRate === null ? null : +(100 * s.hitRate).toFixed(1)), render: (s) => (s.hitRate === null ? '–' : fmtPct(s.hitRate)) },
+    { key: 'dist', header: 'Average distance (km)', csv: (s) => (s.meanDistanceKm === null ? null : Math.round(s.meanDistanceKm)), render: () => null },
+    { key: 'mix', header: 'Often guessed instead', csv: (s) => (s.mixedUpWith ? `${countryName(s.mixedUpWith.cc)} (${s.mixedUpWith.count})` : ''), sort: (s) => (s.mixedUpWith ? s.mixedUpWith.count : null), render: (s) => (s.mixedUpWith ? <span className="place"><Place cc={s.mixedUpWith.cc} /><span className="muted">×{s.mixedUpWith.count}</span></span> : <span className="muted">–</span>) },
     {
       key: 'edge', header: 'vs centre guess', align: 'right',
       title: 'Your average minus what always clicking the best single spot in the country would score (from Street View coverage)',
+      csvHeader: 'Average minus hedge score',
+      csv: (s) => { const base = geo?.countries.get(s.cc)?.base; return base == null ? null : Math.round(s.meanScore - base); },
       sort: (s) => { const base = geo?.countries.get(s.cc)?.base; return base == null ? null : s.meanScore - base; },
       render: (s) => { const base = geo?.countries.get(s.cc)?.base; return base == null ? <span className="muted">–</span> : fmtSigned(s.meanScore - base); },
     },
-    { key: 'trend', header: 'Trend per year', align: 'right', sort: (s) => (s.trend ? s.trend.perYear : null), render: (s) => <TrendCell stat={s} /> },
+    { key: 'trend', header: 'Trend per year', align: 'right', sort: (s) => (s.trend ? s.trend.perYear : null), csv: (s) => (s.trend ? Math.round(s.trend.perYear) : null), render: (s) => <TrendCell stat={s} /> },
+    { key: 'trendLo', header: 'Trend 95% low', csv: (s) => (s.trend ? Math.round(s.trend.lo) : null), render: () => null },
+    { key: 'trendHi', header: 'Trend 95% high', csv: (s) => (s.trend ? Math.round(s.trend.hi) : null), render: () => null },
+    { key: 'trendP', header: 'Trend p (adjusted)', csv: (s) => (s.trend ? +s.trend.pAdjusted.toPrecision(3) : null), render: () => null },
+    { key: 'first', header: 'First round', csv: (s) => new Date(s.firstT).toISOString().slice(0, 10), render: () => null },
+    { key: 'last', header: 'Last round', csv: (s) => new Date(s.lastT).toISOString().slice(0, 10), render: () => null },
   ];
+  const csvOnly = new Set(['code', 'median', 'dist', 'trendLo', 'trendHi', 'trendP', 'first', 'last']);
 
   return (
     <>
@@ -75,11 +87,13 @@ export function CountriesView({ country }: { country: string | null }) {
         {stats.length === 0 ? <Empty title="No rounds in this period" /> : (
           <DataTable
             rows={stats}
-            columns={columns}
+            columns={columns.filter((c) => !csvOnly.has(c.key))}
             rowKey={(s) => s.cc}
             initialSort={{ key: 'n', dir: 'desc' }}
             selectedKey={selected?.cc ?? null}
             onRowClick={(s) => navigate('countries', { country: s.cc })}
+            exportTitle="All countries"
+            exportColumns={columns}
             capped
             caption="Statistics by country"
           />
@@ -139,9 +153,10 @@ function CountryDetail({ stat, model }: { stat: CountryStat; model: ReturnType<t
     {
       key: 'odds', header: 'Chance of a good round', align: 'right', title: 'Model estimate with its 80% interval',
       sort: (r) => r.estimate?.p ?? null,
+      csvHeader: 'Chance of a good round (%)', csv: (r) => (r.estimate ? +(100 * r.estimate.p).toFixed(1) : null),
       render: (r) => (r.estimate ? <>{fmtPct(r.estimate.p)} <span className="muted">({fmtPct(r.estimate.lo)}–{fmtPct(r.estimate.hi)})</span></> : '–'),
     },
-    { key: 'cov', header: 'Street View reach', align: 'right', sort: (r) => r.coverage, render: (r) => `${r.coverage}%` },
+    { key: 'cov', header: 'Street View reach', csvHeader: 'Street View reach (%)', align: 'right', sort: (r) => r.coverage, render: (r) => `${r.coverage}%` },
   ];
 
   const info = geo?.countries.get(cc);
@@ -156,7 +171,7 @@ function CountryDetail({ stat, model }: { stat: CountryStat; model: ReturnType<t
         : undefined}
       actions={<button type="button" className="btn small" onClick={() => navigate('countries')}>Close</button>}
     >
-      <div className="tiles">
+      <Tiles title={`${countryName(cc)} summary`}>
         <StatTile label="Rounds" value={fmtInt(stat.n)} note={`${fmtDate(stat.firstT)} – ${fmtDate(stat.lastT)}`} />
         <StatTile label="Average score" value={fmtInt(stat.meanScore)} note={`median ${fmtInt(stat.medianScore)}${distance !== null ? ` · ${fmtKm(distance)} off on average` : ''}`} />
         <StatTile label="Good rounds" value={fmtPct(stat.goodRate)} note={estimate ? `model: ${fmtPct(estimate.p)} (${fmtPct(estimate.lo)}–${fmtPct(estimate.hi)})` : `${fmtInt(app.settings.threshold)}+ points`} />
@@ -166,12 +181,14 @@ function CountryDetail({ stat, model }: { stat: CountryStat; model: ReturnType<t
           value={stat.trend ? fmtSigned(stat.trend.perYear) : '–'}
           note={stat.trend ? `${fmtSigned(stat.trend.lo)} to ${fmtSigned(stat.trend.hi)} · ${fmtPText(stat.trend.pAdjusted)}` : 'needs more rounds'}
         />
-      </div>
+      </Tiles>
       <ChartBlock
+        title={`${countryName(cc)}: round scores over time`}
+        subtitle={`Every round in ${countryName(cc)} (out of 5,000), with a ${window}-round average${chart.fit ? ' and a linear trend' : ''}.`}
         legend={legend}
         table={{
-          columns: ['Date', 'Round', 'Region', 'Score', 'Distance'],
-          rows: [...rounds].reverse().map((r) => [fmtDate(r.t), `Round ${r.round + 1}`, geo && r.region >= 0 ? geo.regions[r.region].name : '–', r.score, r.distance !== null ? fmtKm(r.distance / 1000) : '–']),
+          columns: ['Date', 'Round', 'Region', 'Location lat', 'Location lng', 'Score', 'Distance (km)', 'Guessed country'],
+          rows: [...rounds].reverse().map((r) => [r.date, r.round + 1, geo && r.region >= 0 ? geo.regions[r.region].name : '', r.lat, r.lng, r.score, r.distance !== null ? +(r.distance / 1000).toFixed(1) : '', r.guessCc ?? '']),
         }}
       >
         <TimeChart
@@ -187,7 +204,7 @@ function CountryDetail({ stat, model }: { stat: CountryStat; model: ReturnType<t
       {regions.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <h3 className="card-title" style={{ fontSize: 15, marginBottom: 8 }}>By region</h3>
-          <DataTable rows={regions} columns={regionColumns} rowKey={(r) => String(r.idx)} initialSort={{ key: 'n', dir: 'desc' }} capped caption={`Regions of ${countryName(cc)}`} />
+          <DataTable rows={regions} columns={regionColumns} rowKey={(r) => String(r.idx)} initialSort={{ key: 'n', dir: 'desc' }} capped caption={`Regions of ${countryName(cc)}`} exportTitle={`${countryName(cc)} by region`} />
         </div>
       )}
     </Card>

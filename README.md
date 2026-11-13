@@ -10,6 +10,8 @@ It is a static web app. Your data stays in your browser; there is no server and 
 
 ![Explored map: every location you have been dropped in](docs/explored.png)
 
+![Duels: where two teammates should hedge in the United States](docs/duels.png)
+
 *(Screenshots show the built-in demo players.)*
 
 ## What it does
@@ -24,6 +26,8 @@ It is a static web app. Your data stays in your browser; there is no server and 
 | Scores over time for specific countries | **Countries** → pick a country (round scores, trend, region breakdown) |
 | Regression for the learning curve, overall and by country | **Learning curve** |
 | Map of how much of the world you have explored | **Explored** |
+| Best hedge spot per country for duels, and where two teammates should hedge | **Duels: hedging** |
+| Every graph as a PDF, every table and statistic as a CSV | **⤓ PDF / ⤓ CSV** on each chart, map and table, and **⤓ Export** at the top of each page |
 
 ## Try it
 
@@ -81,7 +85,7 @@ Per country, the round scores are regressed on time (points per year, with a 95%
 
 ### Street View coverage
 
-The coverage data is built once by [`scripts/build-geodata.mjs`](scripts/build-geodata.mjs) from two public sources:
+The coverage data is built once by [`scripts/build-geodata.ts`](scripts/build-geodata.ts) from two public sources:
 
 - **Where Street View exists**: the [coverage date maps](https://geo.emily.bz/coverage-dates) maintained by emily, about 7.3 million official Street View locations for every country and territory on Google Maps (newest imagery in this build: November 2025).
 - **Boundaries**: [Natural Earth](https://www.naturalearthdata.com/) 1:10m admin-1 (states, provinces and their equivalents; public domain).
@@ -89,7 +93,7 @@ The coverage data is built once by [`scripts/build-geodata.mjs`](scripts/build-g
 Every location is assigned to its region with the full-resolution boundaries. Because the source samples small countries far more densely than large ones, raw point counts are not comparable; instead coverage is measured on a uniform $0.25^\circ$ grid (about 25 km), coarser than the sparsest country's sampling: a cell is "covered" if it contains any location. From that the build derives, per country and per region:
 
 - the covered cells, and the share of the area lying in a covered cell ("Street View reach");
-- the country's **best single guess**: the covered spot that maximises the expected score over the country's coverage, and that expected score. This is what knowing the country and nothing else is worth (about 4,900 in Luxembourg, 2,400 in the United States, 2,300 in Russia). For the United States the point lands near Kansas City; for Brazil, next to Brasília;
+- the country's **best single guess**: the spot that maximises the expected score over the country's Street View locations, and that expected score (the same point as the solo duel hedge, below). This is what knowing the country and nothing else is worth (about 4,930 in Luxembourg, 2,670 in the United States, 2,500 in Russia). For the United States the point lands in southern Illinois, pulled east of the geographic middle by the dense eastern coverage;
 - for each region, how far its coverage lies from that point.
 
 Only these aggregates and the low-resolution coverage bitmap are stored in the repository, not the source points.
@@ -119,6 +123,26 @@ By default the map is coloured only where Street View exists, so a vast region w
 ### Explored
 
 Distinct countries, regions and 1° squares (about 100 km) you have been dropped in, each as a share of what Street View covers. Countries count as "in play" when coverage spans at least five grid cells or they have come up in your data.
+
+### Duels: where to hedge
+
+In a duel you often know the country but not the region. The pin for a country is the spot $h$ that maximises the expected round score over where that country's locations fall:
+
+$$h^\star = \arg\max_h \sum_i w_i \, s\big(d(h, x_i)\big), \qquad s(d) = 5000\,e^{-d / 1491.7\ \text{km}}$$
+
+The $x_i$ are the country's Street View locations from the coverage dataset (grouped into cells of $0.05^\circ$ to $0.25^\circ$ for speed, each weighted $w_i$ by how many locations it holds), so dense coverage pulls harder than a lone road. It behaves like a robust centre of the coverage: because a 3,000 km miss and a 6,000 km miss both score next to nothing, far-off outliers (Alaska, the Canary Islands, the Azores) barely move it. The pin may sit in the sea or across a border; GeoGuessr scores any click by its distance.
+
+In **team duels** a team scores its best guess each round, so two teammates should split the country. The pair of pins maximises the expected value of the *better* of the two scores:
+
+$$(a^\star, b^\star) = \arg\max_{a,\,b} \sum_i w_i \, \max\big(s(d(a, x_i)),\ s(d(b, x_i))\big)$$
+
+Each teammate then covers the locations closer to their pin (the map colours the two halves when you pick a country). Neither problem has a single peak, so the optimiser screens a few hundred candidate spots, polishes the best with a pattern search (and, for pairs, alternates between the two pins from several starts), and keeps the best result. In the United States the solo pin expects 2,665 points; two pins (in Kansas and in eastern Kentucky) expect 3,079.
+
+Assumptions: within a country, locations follow Street View coverage; the country is known for certain; scoring is the World map's (smaller maps fall off faster, which pulls pins towards the densest coverage). The section works without any imported data.
+
+### Exports
+
+Every chart has **⤓ PDF** (an A4 landscape page with title, legend, player and period, the chart as vector graphics, and sources) and **⤓ CSV** (the numbers behind it, the same as its *Show table* view). Maps export as high-resolution images in a PDF with their colour scale. Tables export as CSV with raw numbers (ISO dates, plain numbers, percentages as numbers) and include columns that are only in the export, such as coordinates and confidence bounds. The **⤓ Export** button at the top of each page lists everything on it, including the summary tiles, and can download it all as one ZIP. PDFs always use the light colours, whatever theme you view the app in, and embed the DejaVu Sans font so accented and non-Latin names print correctly.
 
 ### Leaderboard
 
@@ -151,15 +175,17 @@ To try the full collection flow locally: run `npm run dev` and `npm run mock:geo
 src/collector/   the script that runs on geoguessr.com (core.ts is environment-agnostic and tested)
 src/data/        export format, merging, derived series, demo players, browser storage
 src/geo/         boundaries, region lookup, Mercator
-src/stats/       regressions, the odds model, country statistics, leaderboard, exploration
+src/stats/       regressions, the odds model, duel hedges, country statistics, leaderboard, exploration
+src/export/      CSV, ZIP and PDF export (the PDF code loads only when used)
 src/charts/      SVG charts with crosshair tooltips and table views
 src/map/         the canvas world map
 src/views/       one file per tab
 scripts/         geodata pipeline, collector bundling, mock GeoGuessr
-public/data/     generated geodata (regions, coverage statistics, coverage bitmap)
+public/data/     generated geodata (regions, coverage statistics, coverage bitmap, duel hedges)
+public/fonts/    DejaVu Sans (subset) for PDF text, with its licence
 ```
 
-`node scripts/run-ts.mjs scripts/dev/eval-lookup.ts <sample.json>` measures how well the simplified boundaries shipped to the browser reproduce the full-resolution assignment (the sample comes from `build-geodata.mjs --sample-out`). In this build 99.7% of 183,000 sampled Street View locations resolve to the same region.
+`node scripts/run-ts.mjs scripts/dev/eval-lookup.ts <sample.json>` measures how well the simplified boundaries shipped to the browser reproduce the full-resolution assignment (the sample comes from `npm run build:geodata -- --sample-out <file>`). In this build 99.7% of 183,000 sampled Street View locations resolve to the same region.
 
 ### Export file format
 
@@ -186,10 +212,11 @@ Plain JSON, so other tools can produce or consume it:
 - When GeoGuessr does not report a challenge's date, the app uses the earliest time any player in your data started it (Daily Challenges run on UTC days).
 - Region statistics rely on simplified boundaries: about 0.3% of locations near a border are credited to a neighbouring region.
 - Coverage is a snapshot; rebuild the geodata to refresh it.
+- Duel hedges assume locations follow Street View coverage within a country; GeoGuessr's own map distributions are not public.
 - Everything is stored in the browser you use. Use **Backup → Download everything** before clearing site data or switching browsers.
 
 ## Credits
 
-Street View coverage from [emily's coverage date maps](https://geo.emily.bz/coverage-dates). Boundaries from [Natural Earth](https://www.naturalearthdata.com/). Response-shape notes from the community's [py-geoguessr](https://github.com/miss-inputs/py-geoguessr).
+Street View coverage from [emily's coverage date maps](https://geo.emily.bz/coverage-dates). Boundaries from [Natural Earth](https://www.naturalearthdata.com/). PDF text in [DejaVu Sans](https://dejavu-fonts.github.io/) (licence in `public/fonts`). Response-shape notes from the community's [py-geoguessr](https://github.com/miss-inputs/py-geoguessr).
 
 This is an unofficial fan project. It is not affiliated with or endorsed by GeoGuessr, and "GeoGuessr" and "Street View" are trademarks of their respective owners.

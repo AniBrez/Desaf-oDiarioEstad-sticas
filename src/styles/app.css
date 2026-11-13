@@ -3,7 +3,9 @@
    (one per player, never recycled), one blue ramp for magnitude, and neutral chrome.
    Dark mode has its own steps rather than an automatic inversion.
 ------------------------------------------------------------------------------------------- */
-:root {
+/* .light-scope re-declares the light tokens on any element: exports use it to draw in light
+   colours whatever theme the page is in. */
+:root, .light-scope {
   color-scheme: light;
   --page: #f9f9f7;
   --surface: #fcfcfb;
@@ -54,6 +56,9 @@
   --map-line-soft: rgba(11, 11, 11, 0.1);
   --map-point: #eb6834;
   --map-point-ring: #fcfcfb;
+  --duel-coverage: #c2c0b6;
+  --pin-a-area: #86b6ef;
+  --pin-b-area: #f2a383;
 
   --radius: 12px;
   --radius-sm: 8px;
@@ -102,6 +107,9 @@
     --map-line-soft: rgba(255, 255, 255, 0.12);
     --map-point: #d95926;
     --map-point-ring: #1a1a19;
+    --duel-coverage: #4a4945;
+    --pin-a-area: #1c5cab;
+    --pin-b-area: #9c3f1c;
   }
 }
 
@@ -146,6 +154,9 @@
   --map-line-soft: rgba(255, 255, 255, 0.12);
   --map-point: #d95926;
   --map-point-ring: #1a1a19;
+  --duel-coverage: #4a4945;
+  --pin-a-area: #1c5cab;
+  --pin-b-area: #9c3f1c;
 }
 
 /* ------------------------------------------------------------------------------------------
@@ -439,3 +450,36 @@ code.inline { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ------------------------------------------------------------------------------------------
+   Export
+------------------------------------------------------------------------------------------- */
+.export-buttons { display: inline-flex; gap: 2px; align-items: center; flex-wrap: wrap; }
+.export-error { color: var(--critical-text); font-size: 12.5px; margin-left: 6px; }
+.export-menu { position: relative; margin-left: auto; }
+.export-panel {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; width: min(380px, calc(100vw - 32px));
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 12px; display: grid; gap: 10px;
+}
+.export-panel-head { display: grid; gap: 2px; font-size: 13px; }
+.export-panel ul { list-style: none; margin: 0; padding: 0; max-height: 50vh; overflow: auto; display: grid; }
+.export-panel li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--grid); font-size: 13.5px; }
+.export-panel li:last-child { border-bottom: 0; }
+.export-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.table-toolbar { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+/* A chart stays mounted (for PDF export) while its table view is showing. */
+.chart-parked { position: absolute; left: 0; top: 0; width: 100%; height: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+.chart-block { position: relative; }
+
+/* ------------------------------------------------------------------------------------------
+   Duels
+------------------------------------------------------------------------------------------- */
+.pin-badge {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; flex: none;
+  color: #fff; font-size: 12px; font-weight: 700; box-shadow: 0 0 0 2px var(--surface);
+}
+.pin-badge.small { width: 14px; height: 14px; font-size: 9px; }
+.pin-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.duel-detail { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--grid); }
+.detail-head { margin: 0; font-size: 13px; font-weight: 650; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }

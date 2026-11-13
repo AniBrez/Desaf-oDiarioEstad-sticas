@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { ChartBlock, TimeChart, TooltipRow, type LineSeries } from '../charts/TimeChart';
 import { Card, DataTable, Dot, Empty, Place, Segmented, StatTile, type Column } from '../components/ui';
 import { playerColor, useApp } from '../data/store';
-import { WorldMap, type MapTarget } from '../map/WorldMap';
+import { WorldMap, type MapTarget, type WorldMapHandle } from '../map/WorldMap';
+import { ExportButtons, Tiles } from '../export/ExportKit';
 import { countryName } from '../geo/geo';
 import { explore } from '../stats/explore';
 import { fmtDate, fmtInt, fmtPct, plural } from '../util/format';
@@ -105,19 +106,21 @@ export function ExploredView() {
   }, [geo, result, lastSeen]);
 
   interface Row { cc: string; count: number; seen: number; reachable: number; last: number }
+  const mapHandle = useRef<WorldMapHandle | null>(null);
   const rows = useMemo<Row[]>(() => {
-    if (!geo || !result || !showTable) return [];
+    if (!geo || !result) return [];
     return [...result.countries.entries()].map(([cc, count]) => {
       const regions = geo.countries.get(cc)?.regions ?? [];
       const reachable = regions.filter((i) => geo.regions[i].cells > 0 || result.regions.has(i));
       return { cc, count, seen: reachable.filter((i) => result.regions.has(i)).length, reachable: reachable.length, last: lastSeen.byCountry.get(cc) ?? 0 };
     });
-  }, [geo, result, showTable, lastSeen]);
+  }, [geo, result, lastSeen]);
   const columns: Column<Row>[] = [
     { key: 'name', header: 'Country', sort: (r) => countryName(r.cc), render: (r) => <Place cc={r.cc} /> },
     { key: 'count', header: 'Times dropped here', align: 'right', sort: (r) => r.count, render: (r) => fmtInt(r.count) },
-    { key: 'regions', header: 'Regions seen', align: 'right', sort: (r) => (r.reachable ? r.seen / r.reachable : null), render: (r) => `${r.seen} of ${r.reachable}` },
-    { key: 'last', header: 'Last time', align: 'right', sort: (r) => r.last, render: (r) => fmtDate(r.last) },
+    { key: 'regions', header: 'Regions seen', align: 'right', sort: (r) => (r.reachable ? r.seen / r.reachable : null), csv: (r) => r.seen, render: (r) => `${r.seen} of ${r.reachable}` },
+    { key: 'reachable', header: 'Regions with Street View', csv: (r) => r.reachable, render: () => null },
+    { key: 'last', header: 'Last time', align: 'right', sort: (r) => r.last, csv: (r) => new Date(r.last).toISOString().slice(0, 10), render: (r) => fmtDate(r.last) },
   ];
 
   if (!geo || !result || !classes) return <Card><Empty title={app.geoError ? 'The map data could not be loaded' : 'Loading map data…'} /></Card>;
@@ -132,16 +135,40 @@ export function ExploredView() {
 
   return (
     <>
-      <div className="tiles">
+      <Tiles title="Exploration summary">
         <StatTile label="Countries and territories" value={`${fmtInt(result.countries.size)} of ${fmtInt(totals.countries)}`} meter={share.countries} note={`${fmtPct(share.countries)} of those with Street View`} />
         <StatTile label="Regions" value={`${fmtInt(result.regions.size)} of ${fmtInt(totals.regions)}`} meter={share.regions} note={`${fmtPct(share.regions)} of states, provinces and the like`} />
         <StatTile label="100 km squares" value={`${fmtInt(result.cells.size)} of ${fmtInt(totals.cells)}`} meter={share.cells} note={`${fmtPct(share.cells, 1)} of the covered world`} />
         <StatTile label="Locations seen" value={fmtInt(focus.rounds.length)} note={`in ${plural(focus.days.length, 'game')}`} />
-      </div>
+      </Tiles>
 
       <Card
         title="The world you have been dropped in"
         subtitle={`Every Daily Challenge round of ${focus.player.nick}. Darker places have come up more often; the palest blue is still waiting.`}
+        actions={(
+          <ExportButtons item={{
+            title: 'Explored map',
+            pdf: () => {
+              const canvas = mapHandle.current?.toCanvas({ scale: 2 });
+              if (!canvas) return null;
+              return {
+                title: `The world ${focus.player.nick} has been dropped in`,
+                subtitle: `${fmtInt(result.countries.size)} of ${fmtInt(totals.countries)} countries, ${fmtInt(result.regions.size)} of ${fmtInt(totals.regions)} regions, ${fmtInt(focus.rounds.length)} locations. Darker places have come up more often.`,
+                legend: [
+                  ...BANDS.map((b) => ({ label: b.label === 'Not yet' ? 'Not yet' : `${b.label} times`, color: `var(${b.colorVar})`, kind: 'box' as const })),
+                  { label: 'No Street View', color: 'var(--map-land)', kind: 'box' as const },
+                  ...(dots ? [{ label: 'A round', color: 'var(--map-point)', kind: 'dot' as const }] : []),
+                ],
+                graphic: { kind: 'canvas', canvas },
+              };
+            },
+            csv: () => [
+              { name: 'countries', columns: ['Country', 'Code', 'Times dropped here', 'Regions seen', 'Regions with Street View', 'Last time'], rows: [...rows].sort((a, b) => b.count - a.count).map((r) => [countryName(r.cc), r.cc, r.count, r.seen, r.reachable, new Date(r.last).toISOString().slice(0, 10)]) },
+              { name: 'regions', columns: ['Region', 'Region id', 'Country', 'Code', 'Times dropped here', 'Last time'], rows: [...result.regions.entries()].sort((a, b) => b[1] - a[1]).map(([idx, n]) => [geo.regions[idx].name, geo.regions[idx].id, countryName(geo.regions[idx].cc), geo.regions[idx].cc, n, new Date(lastSeen.byRegion.get(idx) ?? 0).toISOString().slice(0, 10)]) },
+              { name: 'locations', columns: ['Date', 'Round', 'Lat', 'Lng', 'Country', 'Region', 'Score'], rows: focus.rounds.map((r) => [r.date, r.round + 1, r.lat, r.lng, r.cc ?? '', r.region >= 0 ? geo.regions[r.region].name : '', r.score]) },
+            ],
+          }} />
+        )}
       >
         <div className="row" style={{ marginBottom: 12, gap: '10px 18px' }}>
           <Segmented<Level> label="Detail" value={level} onChange={setLevel} options={[{ value: 'region', label: 'Regions' }, { value: 'country', label: 'Countries' }]} />
@@ -152,6 +179,7 @@ export function ExploredView() {
           </div>
         </div>
         <WorldMap
+          handle={mapHandle}
           geo={geo}
           level={level}
           classes={classes}
@@ -173,7 +201,7 @@ export function ExploredView() {
         </div>
         {showTable && (
           <div style={{ marginTop: 8 }}>
-            <DataTable rows={rows} columns={columns} rowKey={(r) => r.cc} initialSort={{ key: 'count', dir: 'desc' }} onRowClick={(r) => navigate('countries', { country: r.cc })} capped caption="Countries you have been dropped in" />
+            <DataTable rows={rows} columns={columns.filter((c) => c.key !== 'reachable')} exportColumns={columns} exportTitle="Countries you have been dropped in" rowKey={(r) => r.cc} initialSort={{ key: 'count', dir: 'desc' }} onRowClick={(r) => navigate('countries', { country: r.cc })} capped caption="Countries you have been dropped in" />
           </div>
         )}
       </Card>
@@ -181,10 +209,12 @@ export function ExploredView() {
       <div className="grid side">
         <Card title="Discovery over time" subtitle="Share of what Street View covers that you have seen so far, at three levels of detail.">
           <ChartBlock
+            title="Discovery over time"
+            subtitle="Share of what Street View covers that has come up so far, at three levels of detail."
             legend={lines.map((l) => ({ label: l.label, color: l.color }))}
             table={{
-              columns: ['Date', 'Countries', 'Regions', '100 km squares'],
-              rows: [...result.timeline].reverse().map((p) => [fmtDate(p.t), p.countries, p.regions, p.cells]),
+              columns: ['Date', 'Countries', 'Regions', '100 km squares', 'Countries (%)', 'Regions (%)', '100 km squares (%)'],
+              rows: [...result.timeline].reverse().map((p) => [new Date(p.t).toISOString().slice(0, 10), p.countries, p.regions, p.cells, +((100 * p.countries) / totals.countries).toFixed(1), +((100 * p.regions) / totals.regions).toFixed(1), +((100 * p.cells) / totals.cells).toFixed(2)]),
             }}
           >
             <TimeChart
@@ -198,7 +228,11 @@ export function ExploredView() {
             />
           </ChartBlock>
         </Card>
-        <Card title="Still to discover" subtitle={result.unseen.length ? `${plural(result.unseen.length, 'country', 'countries')} with Street View have never come up, largest coverage first.` : undefined}>
+        <Card
+          title="Still to discover"
+          subtitle={result.unseen.length ? `${plural(result.unseen.length, 'country', 'countries')} with Street View have never come up, largest coverage first.` : undefined}
+          actions={result.unseen.length > 0 && <ExportButtons item={{ title: 'Still to discover', csv: () => [{ name: 'still to discover', columns: ['Country', 'Code', 'Covered 25 km cells'], rows: result.unseen.map((u) => [countryName(u.cc), u.cc, u.cells]) }] }} />}
+        >
           {result.unseen.length === 0 ? <p className="note">You have been dropped in every country and territory Street View covers.</p> : (
             <div className="chips">
               {result.unseen.slice(0, 40).map((u) => <span key={u.cc} className="chip static"><Place cc={u.cc} /></span>)}
@@ -209,7 +243,18 @@ export function ExploredView() {
       </div>
 
       {others.length > 0 && (
-        <Card title="Who has seen more?" subtitle="The same counts for everyone you are comparing with.">
+        <Card
+          title="Who has seen more?"
+          subtitle="The same counts for everyone you are comparing with."
+          actions={<ExportButtons item={{
+            title: 'Who has seen more',
+            csv: () => [{
+              name: 'who has seen more',
+              columns: ['Player', 'Games', 'Countries', 'Countries (%)', 'Regions', 'Regions (%)', '100 km squares', '100 km squares (%)'],
+              rows: [{ s: focus, e: result }, ...others].map(({ s, e }) => [s.player.nick, s.days.length, e.countries.size, +((100 * e.countries.size) / e.totals.countries).toFixed(1), e.regions.size, +((100 * e.regions.size) / e.totals.regions).toFixed(1), e.cells.size, +((100 * e.cells.size) / e.totals.cells).toFixed(2)]),
+            }],
+          }} />}
+        >
           <div className="table-wrap">
             <table className="data">
               <thead><tr><th scope="col">Player</th><th scope="col" className="r">Games</th><th scope="col" className="r">Countries</th><th scope="col" className="r">Regions</th><th scope="col" className="r">100 km squares</th></tr></thead>

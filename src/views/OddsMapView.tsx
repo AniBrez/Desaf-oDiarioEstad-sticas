@@ -1,10 +1,12 @@
-import { useCallback, useMemo, useState, useTransition } from 'react';
+import { useCallback, useMemo, useRef, useState, useTransition } from 'react';
 import { BarList } from '../charts/Charts';
-import { TooltipRow } from '../charts/TimeChart';
-import { Card, DataTable, Empty, niceClassScale, Place, ScaleLegend, Segmented, type ClassScale, type Column } from '../components/ui';
+import { ChartBlock, TooltipRow } from '../charts/TimeChart';
+import { Card, DataTable, Empty, niceClassScale, pdfScale, Place, ScaleLegend, Segmented, type ClassScale, type Column } from '../components/ui';
+import { ExportButtons } from '../export/ExportKit';
+import type { CsvTable } from '../export/files';
 import { useApp } from '../data/store';
 import { countryName } from '../geo/geo';
-import { WorldMap, type MapTarget } from '../map/WorldMap';
+import { WorldMap, type MapTarget, type WorldMapHandle } from '../map/WorldMap';
 import { distanceForScore, type Estimate } from '../stats/probability';
 import { fmtInt, fmtKm, fmtPct, plural } from '../util/format';
 import { navigate } from '../util/hooks';
@@ -40,6 +42,7 @@ export function OddsMapView() {
   const [level, setLevel] = useState<Level>('region');
   const [paint, setPaint] = useState<Paint>('coverage');
   const [showTable, setShowTable] = useState(false);
+  const mapHandle = useRef<WorldMapHandle | null>(null);
   const threshold = app.settings.threshold;
   // The slider moves at once; the refit it triggers is allowed to lag a frame or two behind.
   const [slider, setSlider] = useState(threshold);
@@ -111,7 +114,7 @@ export function OddsMapView() {
     const known = [...model.countries.entries()].filter(([, e]) => e.n >= 5).map(([cc, e]) => ({ cc, e }));
     const value = (e: Estimate) => (metric === 'chance' ? e.p : e.expected);
     known.sort((a, b) => value(b.e) - value(a.e));
-    const row = ({ cc, e }: { cc: string; e: Estimate }) => ({ key: cc, label: <Place cc={cc} />, value: value(e), note: `${e.n} rounds` });
+    const row = ({ cc, e }: { cc: string; e: Estimate }) => ({ key: cc, name: countryName(cc), label: <Place cc={cc} />, value: value(e), note: `${e.n} rounds`, n: e.n });
     return { best: known.slice(0, 8).map(row), worst: known.slice(-8).reverse().map(row), count: known.length };
   }, [model, metric]);
 
@@ -132,11 +135,30 @@ export function OddsMapView() {
     { key: 'n', header: 'Rounds', align: 'right', sort: (r) => r.e.n, render: (r) => fmtInt(r.e.n) },
     { key: 'good', header: 'Good', align: 'right', sort: (r) => r.e.good, render: (r) => fmtInt(r.e.good) },
     { key: 'p', header: 'Chance of a good round', align: 'right', sort: (r) => r.e.p, render: (r) => fmtPct(r.e.p) },
-    { key: 'ci', header: 'Likely range', align: 'right', render: (r) => `${fmtPct(r.e.lo)}–${fmtPct(r.e.hi)}` },
-    { key: 'exp', header: 'Expected score', align: 'right', sort: (r) => r.e.expected, render: (r) => fmtInt(r.e.expected) },
-    { key: 'cov', header: 'Street View reach', align: 'right', render: (r) => r.coverage },
+    { key: 'ci', header: 'Likely range', align: 'right', csv: false, render: (r) => `${fmtPct(r.e.lo)}–${fmtPct(r.e.hi)}` },
+    { key: 'exp', header: 'Expected score', align: 'right', sort: (r) => r.e.expected, csv: (r) => Math.round(r.e.expected), render: (r) => fmtInt(r.e.expected) },
+    { key: 'cov', header: 'Street View reach', align: 'right', csv: (r) => r.coverage, render: (r) => r.coverage },
     { key: 'share', header: 'Share of rounds', align: 'right', sort: (r) => r.e.share, render: (r) => fmtPct(r.e.share, 2) },
   ];
+
+  /** Every estimate, not just the places with rounds: for the CSV export. */
+  const allEstimates = (): CsvTable[] => {
+    if (!model || !geo) return [];
+    const head = ['Rounds', 'Good rounds', 'Chance of a good round (%)', 'Likely low (%)', 'Likely high (%)', 'Starting estimate (%)', 'Expected score', 'Share of rounds (%)'];
+    const values = (e: Estimate) => [e.n, e.good, +(100 * e.p).toFixed(2), +(100 * e.lo).toFixed(2), +(100 * e.hi).toFixed(2), +(100 * e.prior).toFixed(2), Math.round(e.expected), +(100 * e.share).toFixed(3)];
+    return [
+      {
+        name: 'by region',
+        columns: ['Region', 'Region id', 'Country', 'Code', ...head, 'Street View reach (%)'],
+        rows: geo.regions.flatMap((r, i) => { const e = model.regions[i]; return e ? [[r.name, r.id, countryName(r.cc), r.cc, ...values(e), r.covPct]] : []; }),
+      },
+      {
+        name: 'by country',
+        columns: ['Country', 'Code', ...head, 'Street View reach (%)'],
+        rows: [...model.countries.entries()].map(([cc, e]) => [countryName(cc), cc, ...values(e), +(100 * (geo.countries.get(cc)?.cov ?? 0)).toFixed(1)]),
+      },
+    ];
+  };
 
   if (!geo || !model || !painted) return <Card><Empty title={app.geoError ? 'The map data could not be loaded' : 'Loading map data…'} /></Card>;
   const format = metric === 'chance' ? (v: number) => fmtPct(v) : (v: number) => fmtInt(v);
@@ -146,6 +168,23 @@ export function OddsMapView() {
       <Card
         title="Where are you likely to do well?"
         subtitle={`Estimated for ${focus.player.nick} from ${plural(model.overall.n, 'round')}${model.overall.n ? ` (${fmtPct(model.overall.rate)} good overall)` : ''}, combined with where Street View actually goes. Hover or tap a place.`}
+        actions={(
+          <ExportButtons item={{
+            title: metric === 'chance' ? 'Odds map' : 'Expected score map',
+            pdf: () => {
+              const canvas = mapHandle.current?.toCanvas({ scale: 2 });
+              if (!canvas) return null;
+              return {
+                title: metric === 'chance' ? `Chance of a good round (${fmtInt(threshold)}+ points), by ${level}` : `Expected round score, by ${level}`,
+                subtitle: `Estimated for ${focus.player.nick} from ${plural(model.overall.n, 'round')}, combined with where Street View goes.`,
+                scale: pdfScale(painted.scale, format, metric === 'chance' ? `Chance of ${fmtInt(threshold)}+ points` : 'Expected round score'),
+                legend: [{ label: 'No Street View', color: 'var(--map-land)', kind: 'box' }],
+                graphic: { kind: 'canvas', canvas },
+              };
+            },
+            csv: allEstimates,
+          }} />
+        )}
       >
         <div className="row" style={{ marginBottom: 12, gap: '10px 18px' }}>
           <Segmented<Metric> label="What to show" value={metric} onChange={setMetric} options={[{ value: 'chance', label: 'Chance of a good round' }, { value: 'score', label: 'Expected score' }]} />
@@ -165,6 +204,7 @@ export function OddsMapView() {
           </div>
         </div>
         <WorldMap
+          handle={mapHandle}
           geo={geo}
           level={level}
           classes={painted.classes}
@@ -185,7 +225,7 @@ export function OddsMapView() {
         </div>
         {showTable && (
           <div style={{ marginTop: 8 }}>
-            <DataTable rows={rows} columns={columns} rowKey={(r) => r.key} initialSort={{ key: 'n', dir: 'desc' }} capped caption="Estimates by place" />
+            <DataTable rows={rows} columns={columns} rowKey={(r) => r.key} initialSort={{ key: 'n', dir: 'desc' }} capped caption="Estimates by place" exportTitle={`Estimates by ${level} (places with rounds)`} />
             {level === 'region' && <p className="note" style={{ marginTop: 8 }}>The table lists regions you have had rounds in. Every other region with Street View is estimated too: hover it on the map.</p>}
           </div>
         )}
@@ -215,10 +255,24 @@ export function OddsMapView() {
       {lists && lists.count >= 4 && (
         <div className="grid two">
           <Card title="Your best bets" subtitle="Countries with at least five rounds, highest estimate first.">
-            <BarList rows={lists.best} max={metric === 'chance' ? 1 : 5000} format={format} onPick={(cc) => navigate('countries', { country: cc })} />
+            <ChartBlock
+              title="Your best bets"
+              subtitle={`Countries with at least five rounds, highest ${metric === 'chance' ? 'chance of a good round' : 'expected score'} first.`}
+              table={{ columns: ['Country', metric === 'chance' ? 'Chance of a good round (%)' : 'Expected score', 'Rounds'], rows: lists.best.map((r) => [r.name, metric === 'chance' ? +(100 * r.value).toFixed(1) : Math.round(r.value), r.n]) }}
+              graphic={() => ({ kind: 'bars', max: metric === 'chance' ? 1 : 5000, rows: lists.best.map((r) => ({ label: r.name, value: r.value, display: `${format(r.value)} · ${r.note}` })) })}
+            >
+              <BarList rows={lists.best} max={metric === 'chance' ? 1 : 5000} format={format} onPick={(cc) => navigate('countries', { country: cc })} />
+            </ChartBlock>
           </Card>
           <Card title="Your toughest" subtitle="Where a round is least likely to go well.">
-            <BarList rows={lists.worst} max={metric === 'chance' ? 1 : 5000} format={format} onPick={(cc) => navigate('countries', { country: cc })} />
+            <ChartBlock
+              title="Your toughest"
+              subtitle={`Countries with at least five rounds, lowest ${metric === 'chance' ? 'chance of a good round' : 'expected score'} first.`}
+              table={{ columns: ['Country', metric === 'chance' ? 'Chance of a good round (%)' : 'Expected score', 'Rounds'], rows: lists.worst.map((r) => [r.name, metric === 'chance' ? +(100 * r.value).toFixed(1) : Math.round(r.value), r.n]) }}
+              graphic={() => ({ kind: 'bars', max: metric === 'chance' ? 1 : 5000, rows: lists.worst.map((r) => ({ label: r.name, value: r.value, display: `${format(r.value)} · ${r.note}` })) })}
+            >
+              <BarList rows={lists.worst} max={metric === 'chance' ? 1 : 5000} format={format} onPick={(cc) => navigate('countries', { country: cc })} />
+            </ChartBlock>
           </Card>
         </div>
       )}

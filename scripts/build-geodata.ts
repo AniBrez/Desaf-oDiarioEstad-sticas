@@ -1,10 +1,10 @@
-#!/usr/bin/env node
 /**
  * Builds the static geodata the app ships with:
  *
  *   public/data/regions.topo.json   admin-1 regions of the world (simplified TopoJSON)
  *   public/data/coverage.json       Street View coverage statistics per country and region
  *   public/data/coverage-grid.bin   0.25 degree bitmap of where Street View exists
+ *   public/data/hedges.json         best hedge pins per country for solo and team duels
  *
  * Sources (both public):
  *   - Natural Earth 1:10m admin-1 states/provinces (public domain)
@@ -16,8 +16,8 @@
  * Only aggregates derived from the coverage points are written to the repository;
  * the raw points are never redistributed.
  *
- * Usage:
- *   node scripts/build-geodata.mjs [--download] [--cache <dir>] [--out <dir>]
+ * Usage (from the repository root):
+ *   npm run build:geodata -- [--download] [--cache <dir>] [--out <dir>]
  *
  * With --download the inputs are fetched into the cache directory first (about
  * 700 MB, one file at a time). Without it the script expects them to be there:
@@ -26,12 +26,12 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { topology } from 'topojson-server';
 import { presimplify, simplify } from 'topojson-simplify';
 import { feature } from 'topojson-client';
+import { bestSoloHedge, bestTeamHedge, type WeightedPoint } from '../src/stats/hedge';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = process.cwd();
 const args = process.argv.slice(2);
 const flag = (name) => args.includes(name);
 const opt = (name, fallback) => {
@@ -335,11 +335,22 @@ async function main() {
   let grid = new Uint8Array((GRID_COLS * GRID_ROWS) / 8);
   let totalPoints = 0, unassigned = 0, nearAssigned = 0, territories = 0;
   let newest = '';
+  // Locations per country on a fine grid (count and mean position per cell): the weights for the
+  // duel hedges. Within a country the source samples evenly over the ground near coverage, so
+  // these counts follow how much Street View there is.
+  const FINE_DEG = 0.05, FINE_COLS = Math.round(360 / FINE_DEG), FINE_ROWS = Math.round(180 / FINE_DEG);
+  const fine = new Map(); // cc -> Map(fineCell -> [count, sumLat, sumLng])
   if (flag('--reuse-assignment') && fs.existsSync(assignmentFile)) {
     const saved = JSON.parse(fs.readFileSync(assignmentFile, 'utf8'));
     ({ totalPoints, unassigned, nearAssigned, territories, newest } = saved);
     grid = Uint8Array.from(Buffer.from(saved.grid, 'base64'));
     saved.regions.forEach(([points, cells], i) => { regions[i].points = points; regions[i].cells = new Set(cells); });
+    if (!saved.fine) throw new Error('The cached assignment predates per-location weights; run once without --reuse-assignment.');
+    for (const [cc, flat] of Object.entries(saved.fine)) {
+      const m = new Map();
+      for (let i = 0; i < flat.length; i += 4) m.set(flat[i], [flat[i + 1], flat[i + 2] * flat[i + 1], flat[i + 3] * flat[i + 1]]);
+      fine.set(cc, m);
+    }
     console.log(`  reused cached assignment (${totalPoints.toLocaleString()} points)`);
   } else {
     const files = fs.readdirSync(COVERAGE_DIR).filter((f) => f.endsWith('.json')).sort();
@@ -367,6 +378,11 @@ async function main() {
         const r = regions[idx];
         r.points++;
         r.cells.add(cell);
+        const fineCell = Math.min(FINE_ROWS - 1, Math.floor((lat + 90) / FINE_DEG)) * FINE_COLS + Math.min(FINE_COLS - 1, Math.floor((lng + 180) / FINE_DEG));
+        let perCountry = fine.get(r.cc);
+        if (!perCountry) fine.set(r.cc, perCountry = new Map());
+        const acc = perCountry.get(fineCell);
+        if (acc) { acc[0]++; acc[1] += lat; acc[2] += lng; } else perCountry.set(fineCell, [1, lat, lng]);
         if (sample && totalPoints % SAMPLE_EVERY === 0) sample.push([+lat.toFixed(5), +lng.toFixed(5), r.id]);
       }
       if (process.stdout.isTTY) process.stdout.write(`\r  coverage: ${file.padEnd(48)} ${totalPoints.toLocaleString()} points`);
@@ -378,6 +394,8 @@ async function main() {
       totalPoints, unassigned, nearAssigned, territories, newest,
       grid: Buffer.from(grid).toString('base64'),
       regions: regions.map((r) => [r.points, [...r.cells]]),
+      // Per country: flat [fineCell, count, meanLat, meanLng, ...]
+      fine: Object.fromEntries([...fine.entries()].map(([cc, m]) => [cc, [...m.entries()].flatMap(([k, [n, sLat, sLng]]) => [k, n, +(sLat / n).toFixed(5), +(sLng / n).toFixed(5)])])),
     }));
   }
   console.log(`  ${territories} territories, ${totalPoints.toLocaleString()} points, ${unassigned.toLocaleString()} outside every region`);
@@ -407,6 +425,23 @@ async function main() {
 
   const countriesOut = {};
   const regionsOut = {};
+  const hedgesOut = {};
+  /** The country's locations as weighted points, coarsened until there are few enough to optimise over. */
+  const hedgePoints = (cellsMap): WeightedPoint[] => {
+    if (!cellsMap) return [];
+    let entries = [...cellsMap.entries()].map(([k, [n, sLat, sLng]]) => ({ row: Math.floor(k / FINE_COLS), col: k % FINE_COLS, n, sLat, sLng }));
+    for (const factor of [2, 5, 10, 20]) {
+      if (entries.length <= 6000) break;
+      const merged = new Map();
+      for (const e of entries) {
+        const key = Math.floor(e.row / factor) * FINE_COLS + Math.floor(e.col / factor);
+        const m = merged.get(key);
+        if (m) { m.n += e.n; m.sLat += e.sLat; m.sLng += e.sLng; } else merged.set(key, { ...e });
+      }
+      entries = [...merged.values()];
+    }
+    return entries.map((e) => ({ lat: e.sLat / e.n, lng: e.sLng / e.n, w: e.n }));
+  };
   const names = {};
   const QUANT = [0, 0.25, 0.5, 0.75, 1];
   for (const c of [...byCountry.values()].sort((a, b) => a.cc.localeCompare(b.cc))) {
@@ -418,28 +453,27 @@ async function main() {
     const weights = cells.map(cellAreaKm2);
     const coveredArea = weights.reduce((a, b) => a + b, 0);
 
-    // Best single guess: the covered cell that maximises the expected score over the country's
-    // coverage. This is what "knowing the country and nothing else" is worth.
-    const candidateStep = Math.max(1, Math.floor(cells.length / 600));
-    const sampleStep = Math.max(1, Math.floor(cells.length / 4000));
-    let bestIdx = 0, bestValue = -1;
-    for (let i = 0; i < cells.length; i += candidateStep) {
-      let sum = 0, wsum = 0;
-      for (let j = 0; j < cells.length; j += sampleStep) {
-        const d = haversineKm(centers[i][0], centers[i][1], centers[j][0], centers[j][1]);
-        sum += weights[j] * Math.exp(-d / SCORE_SCALE_KM);
-        wsum += weights[j];
-      }
-      if (sum / wsum > bestValue) { bestValue = sum / wsum; bestIdx = i; }
-    }
-    const guess = centers[bestIdx];
+    // Best single guess (the solo duel hedge): the spot that maximises the expected score over
+    // where the country's locations fall. This is what "knowing the country and nothing else" is
+    // worth. The team hedge is the best pair of spots when the better of two guesses counts.
+    const points = hedgePoints(fine.get(c.cc));
+    const solo = bestSoloHedge(points, { scaleKm: SCORE_SCALE_KM });
+    const team = bestTeamHedge(points, { scaleKm: SCORE_SCALE_KM });
+    const guess = [solo.pins[0].lat, solo.pins[0].lng];
     const distanceOf = new Map();
-    let scoreSum = 0;
-    for (let j = 0; j < cells.length; j++) {
-      const d = haversineKm(guess[0], guess[1], centers[j][0], centers[j][1]);
-      distanceOf.set(cells[j], d);
-      scoreSum += weights[j] * 5000 * Math.exp(-d / SCORE_SCALE_KM);
-    }
+    for (let j = 0; j < cells.length; j++) distanceOf.set(cells[j], haversineKm(guess[0], guess[1], centers[j][0], centers[j][1]));
+    hedgesOut[c.cc] = {
+      n: c.points,
+      one: { p: [solo.pins[0].lat, solo.pins[0].lng], e: Math.round(solo.expected), m: solo.miss.map(Math.round) },
+      two: {
+        p: team.pins.map((pin) => [pin.lat, pin.lng]),
+        e: Math.round(team.expected),
+        s: +team.shares[0].toFixed(3),
+        m: team.miss.map(Math.round),
+      },
+      cells: cells.map((cell, i) => (i === 0 ? cell : cell - cells[i - 1])),
+    };
+    process.stdout.write(`\r  hedges: ${c.cc} (${points.length} weighted points)      `);
     const sortedAll = [...distanceOf.values()].sort((a, b) => a - b);
 
     countriesOut[c.cc] = {
@@ -447,7 +481,7 @@ async function main() {
       area: Math.round(c.areaKm2),
       cov: +Math.min(1, coveredArea / Math.max(1, c.areaKm2)).toFixed(3),
       guess: [+guess[0].toFixed(2), +guess[1].toFixed(2)],
-      base: Math.round(scoreSum / coveredArea),
+      base: Math.round(solo.expected),
       d: quantiles(sortedAll, QUANT).map(Math.round),
     };
 
@@ -462,6 +496,8 @@ async function main() {
       ];
     }
   }
+
+  process.stdout.write('\n');
 
   // ---- Simplified topology for the app ----------------------------------------------------
   console.log('Building topology ...');
@@ -588,6 +624,19 @@ async function main() {
   };
   fs.writeFileSync(path.join(OUT, 'coverage.json'), JSON.stringify(coverage));
 
+  const hedges = {
+    meta: {
+      generated: coverage.meta.generated,
+      scoreScaleKm: SCORE_SCALE_KM,
+      cellDeg: CELL_DEG,
+      gridCols: GRID_COLS,
+      fields: 'n: Street View locations in the source; one: solo hedge {p: [lat, lng], e: expected round score, m: miss distance km [median, 90th percentile, max]}; two: team hedge {p: [[lat, lng], [lat, lng]], e, s: share of locations the first pin is closer to, m}; cells: covered grid cells, delta-encoded',
+      method: 'Pins maximise the expected round score 5000 * exp(-d / scoreScaleKm) over the country\'s Street View locations (team: the better of the two guesses counts).',
+    },
+    countries: hedgesOut,
+  };
+  fs.writeFileSync(path.join(OUT, 'hedges.json'), JSON.stringify(hedges));
+
   // ---- Report ----------------------------------------------------------------------------
   const covered = Object.entries(countriesOut).sort((a, b) => b[1].cells - a[1].cells);
   console.log(`\nCountries/territories with coverage: ${covered.length}; regions with coverage: ${Object.keys(regionsOut).length}`);
@@ -597,7 +646,7 @@ async function main() {
     console.log(`  ${cc}  ${names[cc].padEnd(28)} cells=${String(c.cells).padStart(6)}  cov=${(c.cov * 100).toFixed(0).padStart(3)}%  base=${String(c.base).padStart(4)}  guess=${c.guess.join(',')}  d50=${c.d[2]}km`);
   }
   const size = (f) => `${(fs.statSync(path.join(OUT, f)).size / 1024).toFixed(0)} KB`;
-  console.log(`\nWrote regions.topo.json (${size('regions.topo.json')}, ${finalTopology.arcs.length} arcs), coverage.json (${size('coverage.json')}), coverage-grid.bin (${size('coverage-grid.bin')})`);
+  console.log(`\nWrote regions.topo.json (${size('regions.topo.json')}, ${finalTopology.arcs.length} arcs), coverage.json (${size('coverage.json')}), coverage-grid.bin (${size('coverage-grid.bin')}), hedges.json (${size('hedges.json')})`);
   console.timeEnd('total');
 }
 

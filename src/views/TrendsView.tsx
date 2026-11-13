@@ -2,12 +2,13 @@ import { useMemo, useState } from 'react';
 import { ForestPlot, type ForestRow } from '../charts/Charts';
 import { ChartBlock, TimeChart, TooltipRow, type LegendItem, type LineSeries } from '../charts/TimeChart';
 import { Card, Empty, Segmented, StatTile } from '../components/ui';
+import { ExportButtons, Tiles } from '../export/ExportKit';
 import { playerColor, useApp } from '../data/store';
 import type { DayRow } from '../data/types';
 import { countryName } from '../geo/geo';
 import { countryStats } from '../stats/countries';
 import { fitBestTrend, linearTrend, mean, type TrendComparison, type TrendFit, type TrendKind } from '../stats/regression';
-import { fmtDate, fmtInt, fmtP, fmtPText, fmtSigned, plural } from '../util/format';
+import { fmtInt, fmtP, fmtPText, fmtSigned, plural } from '../util/format';
 import { navigate } from '../util/hooks';
 import { scoreAxis, scoreDomain } from './shared';
 
@@ -99,7 +100,7 @@ export function TrendsView() {
 
   return (
     <>
-      <div className="tiles">
+      <Tiles title="Learning curve summary">
         <StatTile label="Current level (model)" value={fmtInt(fit.fitted[fit.fitted.length - 1])} note={`after ${plural(days.length, 'game')}`} />
         <StatTile label={`First ${firstN} games`} value={fmtInt(early)} note="average score" />
         <StatTile label={`Latest ${firstN} games`} value={fmtInt(late)} note={`${fmtSigned(late - early)} vs the start`} />
@@ -115,7 +116,7 @@ export function TrendsView() {
           value={fit.pValue < 0.05 ? 'Yes' : 'Unclear'}
           note={`${fmtPText(fit.pValue)} against "no change"`}
         />
-      </div>
+      </Tiles>
 
       <Card
         title="Your learning curve"
@@ -130,10 +131,13 @@ export function TrendsView() {
         )}
       >
         <ChartBlock
+          title={`Learning curve (${MODEL_NAME[fit.kind].toLowerCase()})`}
+          subtitle={describe(fit, days)}
           legend={legend}
+          notes={[`Model: ${MODEL_FORMULA[fit.kind]} · R² ${(100 * fit.r2).toFixed(1)}% · ${fmtPText(fit.pValue)} against no change`]}
           table={{
-            columns: ['Date', 'Score', 'Fitted', 'Band low', 'Band high'],
-            rows: [...days].map((d, i) => [fmtDate(d.t), d.total, Math.round(fit.fitted[i]), Math.round(fit.lo[i]), Math.round(fit.hi[i])]).reverse(),
+            columns: ['Date', 'Game number', 'Score', 'Fitted', '95% band low', '95% band high'],
+            rows: [...days].map((d, i) => [d.date, i + 1, d.total, Math.round(fit.fitted[i]), Math.round(fit.lo[i]), Math.round(fit.hi[i])]).reverse(),
           }}
         >
           <TimeChart
@@ -147,7 +151,17 @@ export function TrendsView() {
           />
         </ChartBlock>
 
-        <div className="table-wrap" style={{ marginTop: 14 }}>
+        <div className="table-toolbar" style={{ marginTop: 14 }}>
+          <ExportButtons item={{
+            title: 'Curve shapes compared',
+            csv: () => [{
+              name: 'curve shapes',
+              columns: ['Curve', 'Formula', 'R squared', 'AIC', 'p vs no change', 'Best fit', 'Parameters'],
+              rows: comparison.all.map((f) => [MODEL_NAME[f.kind], MODEL_FORMULA[f.kind], +f.r2.toFixed(4), +f.aic.toFixed(2), f.pValue, f === comparison.best ? 'yes' : '', Object.entries(f.params).map(([k, v]) => `${k}=${+v.toFixed(3)}`).join('; ')]),
+            }],
+          }} />
+        </div>
+        <div className="table-wrap">
           <table className="data">
             <caption className="visually-hidden">Comparison of curve shapes</caption>
             <thead>
@@ -186,12 +200,11 @@ export function TrendsView() {
       >
         {forest.length === 0 ? <Empty title="No country has enough rounds yet" /> : (
           <ChartBlock
+            title="Learning by country"
+            subtitle="Change in round score per year, with 95% intervals. Grey rows could be chance (false discovery rate 5%)."
             table={{
-              columns: ['Country', 'Rounds', 'Change per year', 'Low', 'High', 'p (adjusted)'],
-              rows: forest.map((r) => {
-                const c = trending.find((x) => x.cc === r.key)!;
-                return [r.label, c.n, fmtSigned(r.value), fmtSigned(r.lo), fmtSigned(r.hi), fmtP(c.trend!.pAdjusted)];
-              }),
+              columns: ['Country', 'Rounds', 'Change per year', '95% low', '95% high', 'p', 'p (adjusted)'],
+              rows: [...trending].sort((a, b) => b.n - a.n).map((c) => [countryName(c.cc), c.n, Math.round(c.trend!.perYear), Math.round(c.trend!.lo), Math.round(c.trend!.hi), +c.trend!.pValue.toPrecision(3), +c.trend!.pAdjusted.toPrecision(3)]),
             }}
           >
             <ForestPlot

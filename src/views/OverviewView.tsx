@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Columns } from '../charts/Charts';
 import { ChartBlock, TimeChart, TooltipRow, type LegendItem, type LineSeries } from '../charts/TimeChart';
+import { ExportButtons, Tiles } from '../export/ExportKit';
+import type { CsvTable } from '../export/files';
 import { Card, Delta, Dot, StatTile } from '../components/ui';
 import { playerColor, useApp } from '../data/store';
 import { scoreByRoundNumber } from '../stats/countries';
@@ -63,11 +65,38 @@ export function OverviewView() {
   const byRound = useMemo(() => scoreByRoundNumber(focus.rounds), [focus.rounds]);
 
   const recentDays = useMemo(() => [...days].reverse().slice(0, expanded ? 90 : 10), [days, expanded]);
+  const compareByToken = useMemo(() => app.compare.map((s) => new Map(s.days.map((d) => [d.token, d.total]))), [app.compare]);
+
+  /** The whole history of the period, one row per game with every round. */
+  const allGamesCsv = (): CsvTable => {
+    const roundCols = [1, 2, 3, 4, 5].flatMap((n) => [`R${n} country`, `R${n} region`, `R${n} location lat`, `R${n} location lng`, `R${n} score`, `R${n} distance (km)`, `R${n} time (s)`]);
+    return {
+      name: 'every game',
+      columns: ['Date', 'Challenge', 'Total score', 'Time (s)', ...roundCols, ...app.compare.map((s) => `${s.player.nick}: total`)],
+      rows: [...days].reverse().map((d) => [
+        d.date,
+        d.token,
+        d.total,
+        d.totalTime,
+        ...d.rounds.flatMap((r) => [
+          r.cc ?? '',
+          app.geo && r.region >= 0 ? app.geo.regions[r.region].name : '',
+          r.lat,
+          r.lng,
+          r.score,
+          r.distance !== null ? +(r.distance / 1000).toFixed(2) : '',
+          r.time,
+        ]),
+        ...compareByToken.map((m) => m.get(d.token) ?? ''),
+      ]),
+    };
+  };
+
   const compareTotals = useMemo(() => app.compare.slice(0, 4).map((s) => ({ s, byToken: new Map(s.days.map((d) => [d.token, d.total])) })), [app.compare]);
 
   return (
     <>
-      <div className="tiles">
+      <Tiles title="Summary">
         <StatTile label="Games played" value={fmtInt(days.length)} note={`${fmtDate(days[0].t)} – ${fmtDate(days[days.length - 1].t)}`} />
         <StatTile label="Average score" value={fmtInt(summary.mean)} note={`median ${fmtInt(summary.median)}`} />
         <StatTile
@@ -79,17 +108,24 @@ export function OverviewView() {
         <StatTile label="Good rounds" value={fmtPct(summary.good)} note={`${fmtInt(app.settings.threshold)}+ points`} />
         <StatTile label="Daily streak" value={plural(summary.streak.current, 'day')} note={`longest ${plural(summary.streak.longest, 'day')}`} />
         <StatTile label="Countries seen" value={fmtInt(summary.countries)} />
-      </div>
+      </Tiles>
 
       <Card
         title="Total score over time"
         subtitle={`Each dot is one Daily Challenge (out of 25,000). Lines are trailing ${window}-game averages${app.compare.length ? ', one per player' : ''}.`}
       >
         <ChartBlock
+          title="Total score over time"
+          subtitle={`Each dot is one Daily Challenge (out of 25,000). Lines are trailing ${window}-game averages.`}
           legend={legend}
           table={{
-            columns: ['Date', 'Score', `${window}-game average`],
-            rows: [...days].reverse().map((d) => [fmtDate(d.t), d.total, rollingByT.has(d.t) ? Math.round(rollingByT.get(d.t)!) : '–']),
+            columns: ['Date', `${focus.player.nick}: score`, `${focus.player.nick}: ${window}-game average`, ...app.compare.map((s) => `${s.player.nick}: score`)],
+            rows: [...days].reverse().map((d) => [
+              d.date,
+              d.total,
+              rollingByT.has(d.t) ? Math.round(rollingByT.get(d.t)!) : '',
+              ...compareByToken.map((m) => m.get(d.token) ?? ''),
+            ]),
           }}
         >
           <TimeChart
@@ -106,6 +142,11 @@ export function OverviewView() {
 
       <div className="grid two">
         <Card title="How your scores are spread" subtitle="Number of games by total score, in bands of 1,000 points.">
+          <ChartBlock
+            title="How your scores are spread"
+            subtitle="Number of games by total score, in bands of 1,000 points."
+            table={{ columns: ['Score from', 'Score to', 'Games'], rows: histogram.map((b) => [b.from, b.from + 999, b.count]) }}
+          >
           <Columns
             ariaLabel="Histogram of total scores"
             counts
@@ -116,8 +157,14 @@ export function OverviewView() {
               tooltip: <><div className="tooltip-title">{fmtInt(b.from)} – {fmtInt(b.from + 999)}</div><TooltipRow label="Games" value={fmtInt(b.count)} /></>,
             }))}
           />
+          </ChartBlock>
         </Card>
         <Card title="Round by round" subtitle="Average score by position in the game: do you warm up, or fade?">
+          <ChartBlock
+            title="Round by round"
+            subtitle="Average score by position in the game."
+            table={{ columns: ['Round', 'Average score', 'Rounds played'], rows: byRound.map((b) => [b.round, Math.round(b.mean), b.n]) }}
+          >
           <Columns
             ariaLabel="Average score by round number"
             yMax={5000}
@@ -128,13 +175,19 @@ export function OverviewView() {
               tooltip: <><div className="tooltip-title">Round {b.round}</div><TooltipRow label="Average" value={fmtInt(b.mean)} /><TooltipRow label="Rounds" value={fmtInt(b.n)} /></>,
             }))}
           />
+          </ChartBlock>
         </Card>
       </div>
 
       <Card
         title="Recent games"
         subtitle="The five rounds of each game: country and score. Darker cells are better rounds; hover a cell for the place and distance."
-        actions={days.length > 10 && <button type="button" className="btn small" onClick={() => setExpanded((v) => !v)}>{expanded ? 'Show fewer' : 'Show more'}</button>}
+        actions={(
+          <>
+            <ExportButtons item={{ title: 'Every game, round by round', csv: () => [allGamesCsv()] }} />
+            {days.length > 10 && <button type="button" className="btn small" onClick={() => setExpanded((v) => !v)}>{expanded ? 'Show fewer' : 'Show more'}</button>}
+          </>
+        )}
       >
         <div className={`table-wrap${expanded ? ' capped' : ''}`}>
           <table className="data">

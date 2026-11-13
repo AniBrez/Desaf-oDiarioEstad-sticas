@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { ChartBlock, TimeChart, type LineSeries } from '../charts/TimeChart';
 import { Card, Delta, Dot, Empty } from '../components/ui';
+import { ExportButtons } from '../export/ExportKit';
 import { playerColor, useApp } from '../data/store';
 import { comparableDays, headToHead, standings } from '../stats/leaderboard';
 import { rollingMeanByTime } from '../stats/regression';
-import { fmtDate, fmtInt, fmtPct, fmtSigned, plural } from '../util/format';
+import { fmtInt, fmtPct, fmtSigned, plural } from '../util/format';
 import { href } from '../util/hooks';
 import { scoreAxis } from './shared';
 
@@ -38,6 +39,7 @@ export function LeaderboardView() {
   const allValues = lines.flatMap((l) => l.points.map((p) => p.v));
   const low = allValues.length ? Math.floor(Math.min(...allValues) / 2500) * 2500 : 0;
   const high = allValues.length ? Math.min(25000, Math.ceil(Math.max(...allValues) / 2500) * 2500) : 25000;
+  const pointAt = new Map(lines.map((l) => [l.id, new Map(l.points.map((p) => [p.t, p.v]))]));
   const dates = [...new Set(lines.flatMap((l) => l.points.map((p) => p.t)))].sort((a, b) => b - a);
 
   return (
@@ -49,8 +51,18 @@ export function LeaderboardView() {
           : commonOnly
             ? `Only the ${plural(sharedCount ?? 0, 'challenge')} that all ${players.length} players took part in.`
             : 'Every game each player has in the period. Wins are counted on days at least two of you played.'}
-        actions={players.length > 1 && (
-          <label className="switch"><input type="checkbox" checked={commonOnly} onChange={(e) => setCommonOnly(e.target.checked)} />Only days everyone played</label>
+        actions={(
+          <>
+            {players.length > 1 && <label className="switch"><input type="checkbox" checked={commonOnly} onChange={(e) => setCommonOnly(e.target.checked)} />Only days everyone played</label>}
+            <ExportButtons item={{
+              title: 'Leaderboard',
+              csv: () => [{
+                name: commonOnly ? 'standings (days everyone played)' : 'standings',
+                columns: ['Rank', 'Player', 'Games', 'Average', 'Median', 'Best', 'Days won', 'Days contested', 'Last 30 days average', 'Change vs previous 30 days', 'Perfect rounds', 'Current streak', 'Longest streak'],
+                rows: table.map((s) => [s.rank, byId.get(s.id)?.nick ?? s.id, s.games, Math.round(s.mean), Math.round(s.median), s.best, s.wins, s.contested, s.recentMean === null ? null : Math.round(s.recentMean), s.recentDelta === null ? null : Math.round(s.recentDelta), s.perfectRounds, s.currentStreak, s.longestStreak]),
+              }],
+            }} />
+          </>
         )}
       >
         {players.length < 2 && (
@@ -103,10 +115,12 @@ export function LeaderboardView() {
       {lines.length > 0 && (
         <Card title="Form over time" subtitle="Average total score over the previous 30 days, for each player (needs at least three games in the window).">
           <ChartBlock
+            title="Form over time"
+            subtitle="Average total score over the previous 30 days, for each player."
             legend={lines.map((l) => ({ label: l.label, color: l.color }))}
             table={{
-              columns: ['Date', ...lines.map((l) => l.label)],
-              rows: dates.slice(0, 400).map((t) => [fmtDate(t), ...lines.map((l) => { const p = l.points.find((x) => x.t === t); return p ? Math.round(p.v) : '–'; })]),
+              columns: ['Date', ...lines.map((l) => `${l.label}: 30-day average`)],
+              rows: dates.map((t) => [new Date(t).toISOString().slice(0, 10), ...lines.map((l) => { const p = pointAt.get(l.id)?.get(t); return p === undefined ? '' : Math.round(p); })]),
             }}
           >
             <TimeChart
@@ -122,7 +136,18 @@ export function LeaderboardView() {
       )}
 
       {duels.length > 0 && (
-        <Card title={`Head to head: ${focus.player.nick} against each friend`} subtitle="On the challenges both of you played.">
+        <Card
+          title={`Head to head: ${focus.player.nick} against each friend`}
+          subtitle="On the challenges both of you played."
+          actions={<ExportButtons item={{
+            title: 'Head to head',
+            csv: () => [{
+              name: 'head to head',
+              columns: ['Player', 'Against', 'Shared days', 'Won', 'Tied', 'Lost', 'Days won (%)', 'Average margin'],
+              rows: duels.map((d) => [focus.player.nick, byId.get(d.opponent)?.nick ?? d.opponent, d.days, d.wins, d.ties, d.losses, +((100 * d.wins) / d.days).toFixed(1), Math.round(d.meanMargin)]),
+            }],
+          }} />}
+        >
           <div className="table-wrap">
             <table className="data">
               <thead>

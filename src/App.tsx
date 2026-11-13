@@ -1,9 +1,12 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Dot, Segmented } from './components/ui';
 import { PERIODS, playerColor, useApp, type Period } from './data/store';
+import { ExportMenu, ExportProvider, type ExportInfo } from './export/ExportKit';
+import { fmtInt } from './util/format';
 import { href, navigate, useRoute, useTheme, type ThemeChoice } from './util/hooks';
 import { CountriesView } from './views/CountriesView';
 import { DataView } from './views/DataView';
+import { DuelsView } from './views/DuelsView';
 import { ExploredView } from './views/ExploredView';
 import { LeaderboardView } from './views/LeaderboardView';
 import { OddsMapView } from './views/OddsMapView';
@@ -17,8 +20,12 @@ const TABS: { path: string; label: string }[] = [
   { path: 'map', label: 'Odds map' },
   { path: 'explored', label: 'Explored' },
   { path: 'leaderboard', label: 'Leaderboard' },
+  { path: 'duels', label: 'Duels: hedging' },
   { path: 'data', label: 'Data & friends' },
 ];
+
+/** Sections that do not depend on imported Daily Challenge data. */
+const STANDALONE = new Set(['data', 'duels']);
 
 function ThemeToggle() {
   const [theme, setTheme] = useTheme();
@@ -64,6 +71,7 @@ function FilterBar() {
           </div>
         </div>
       )}
+      <ExportMenu />
     </div>
   );
 }
@@ -80,6 +88,7 @@ function Welcome() {
         </p>
         <div className="row" style={{ justifyContent: 'center' }}>
           <a className="btn primary" href={href('data')}>Get my data</a>
+          <a className="btn" href={href('duels')}>Duel hedges (no data needed)</a>
           <button type="button" className="btn" disabled={!app.geo} onClick={() => { app.loadDemo(); navigate('overview'); }}>
             {app.geo ? 'Explore with demo data' : 'Loading map data…'}
           </button>
@@ -96,8 +105,18 @@ export function App() {
   const tab = TABS.some((t) => t.path === route.path) ? route.path : 'overview';
   useEffect(() => { window.scrollTo(0, 0); }, [tab]);
 
+  const exportInfo = useMemo<ExportInfo>(() => {
+    if (STANDALONE.has(tab) || !app.focus) return { page: tab, context: '' };
+    const period = PERIODS.find((p) => p.key === app.settings.period)?.label ?? '';
+    const parts = [`Player: ${app.focus.player.nick}`, `Period: ${period}`];
+    if (app.compare.length) parts.push(`Compared with: ${app.compare.map((s) => s.player.nick).join(', ')}`);
+    if (tab === 'map') parts.push(`Good round: ${fmtInt(app.settings.threshold)}+ points`);
+    return { page: tab, context: parts.join(' · '), player: app.focus.player.nick };
+  }, [tab, app.focus, app.compare, app.settings.period, app.settings.threshold]);
+
   let view;
   if (tab === 'data') view = <DataView />;
+  else if (tab === 'duels') view = <DuelsView />;
   else if (!app.ready) view = <div className="empty">Loading…</div>;
   else if (!hasData || !app.focus) view = <Welcome />;
   else if (tab === 'trends') view = <TrendsView />;
@@ -121,9 +140,10 @@ export function App() {
           <a key={t.path} className="tab" href={href(t.path)} aria-current={t.path === tab ? 'page' : undefined}>{t.label}</a>
         ))}
       </nav>
-      {tab !== 'data' ? <FilterBar /> : <div style={{ height: 18 }} />}
+      <ExportProvider key={tab} info={exportInfo}>
+      {!STANDALONE.has(tab) ? <FilterBar /> : <div style={{ height: 18 }} />}
       <main>
-        {app.hasDemo && tab !== 'data' && (
+        {app.hasDemo && !STANDALONE.has(tab) && (
           <div className="demo-banner" role="note">
             <span><strong>Demo data.</strong> These players are made up so you can try everything out.</span>
             <a href={href('data')}>Bring in your own</a>
@@ -132,6 +152,7 @@ export function App() {
         {app.geoError && <div className="message error" style={{ marginBottom: 16 }}><span className="icon">!</span><span>Map data could not be loaded ({app.geoError}). Charts still work; maps and region statistics need a reload.</span></div>}
         {view}
       </main>
+      </ExportProvider>
       <footer className="footer">
         <p>
           Unofficial fan project, not affiliated with or endorsed by GeoGuessr. Your data stays in this browser.

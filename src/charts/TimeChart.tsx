@@ -1,8 +1,10 @@
-import { useId, useMemo, useState, type ReactNode } from 'react';
+import { useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { scaleLinear, scaleUtc } from 'd3-scale';
 import { line as d3Line } from 'd3-shape';
 import { fmtCompact, fmtDate, fmtInt } from '../util/format';
 import { useWidth } from '../util/hooks';
+import { ExportButtons, type ExportItem } from '../export/ExportKit';
+import type { PdfGraphic } from '../export/pdf';
 
 export interface ChartPoint {
   t: number;
@@ -272,35 +274,72 @@ export function Legend({ items }: { items: LegendItem[] }) {
 
 export interface TableView {
   columns: string[];
+  /** Numbers are shown formatted and exported raw. */
   rows: (string | number)[][];
 }
 
-/** A chart with its legend and a "Table" toggle showing the same numbers as text. */
-export function ChartBlock({ legend, table, children, toolbar }: { legend?: LegendItem[]; table: TableView; children: ReactNode; toolbar?: ReactNode }) {
+const showNumber = (v: number): string => (Number.isInteger(v) ? fmtInt(v) : v.toLocaleString('en-US', { maximumFractionDigits: 2 }));
+
+/**
+ * A chart with its legend, a "Show table" twin with the same numbers, and exports: the chart as
+ * a PDF (vector), the numbers as CSV. The chart stays mounted while the table shows, so it can
+ * still be exported.
+ */
+export function ChartBlock({ title, subtitle, legend, table, children, toolbar, graphic, notes }: {
+  /** Names the exports. */
+  title: string;
+  subtitle?: string;
+  legend?: LegendItem[];
+  table: TableView;
+  children: ReactNode;
+  toolbar?: ReactNode;
+  /** PDF content for charts that are not SVG. */
+  graphic?: () => PdfGraphic | null;
+  notes?: string[];
+}) {
   const [showTable, setShowTable] = useState(false);
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const item: ExportItem = {
+    title,
+    csv: () => [{ name: title, columns: table.columns, rows: table.rows }],
+    pdf: () => {
+      const svg = chartRef.current?.querySelector('svg');
+      const g = graphic ? graphic() : svg ? { kind: 'svg' as const, svg } : null;
+      if (!g) return null;
+      return {
+        title,
+        subtitle,
+        legend: legend && legend.length > 1 ? legend.map((l) => ({ label: l.label, color: l.color, kind: l.kind ?? 'line' })) : undefined,
+        graphic: g,
+        notes,
+      };
+    },
+  };
   return (
-    <div>
+    <div className="chart-block">
       <div className="row" style={{ justifyContent: 'space-between', marginBottom: 6 }}>
         <div style={{ flex: 1, minWidth: 0 }}>{legend && <Legend items={legend} />}</div>
-        <div className="row">
+        <div className="row" style={{ gap: 4 }}>
           {toolbar}
           <button type="button" className="btn quiet small" aria-pressed={showTable} onClick={() => setShowTable((v) => !v)}>
             {showTable ? 'Show chart' : 'Show table'}
           </button>
+          <ExportButtons item={item} />
         </div>
       </div>
-      {showTable ? (
+      {showTable && (
         <div className="table-wrap capped">
           <table className="data">
             <thead><tr>{table.columns.map((c, i) => <th key={c} scope="col" className={i ? 'r' : ''}>{c}</th>)}</tr></thead>
             <tbody>
               {table.rows.map((row, i) => (
-                <tr key={i}>{row.map((cell, j) => <td key={j} className={j ? 'r num' : ''}>{typeof cell === 'number' ? fmtInt(cell) : cell}</td>)}</tr>
+                <tr key={i}>{row.map((cell, j) => <td key={j} className={j ? 'r num' : ''}>{typeof cell === 'number' ? showNumber(cell) : cell}</td>)}</tr>
               ))}
             </tbody>
           </table>
         </div>
-      ) : children}
+      )}
+      <div ref={chartRef} className={showTable ? 'chart-parked' : undefined} aria-hidden={showTable || undefined}>{children}</div>
     </div>
   );
 }

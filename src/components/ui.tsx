@@ -1,4 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
+import { ExportButtons } from '../export/ExportKit';
+import type { Cell, CsvTable } from '../export/files';
+import type { PdfScale } from '../export/pdf';
 import { countryName } from '../geo/geo';
 import { fmtSigned, flagEmoji, supportsFlagEmoji } from '../util/format';
 
@@ -98,9 +101,23 @@ export interface Column<T> {
   render: (row: T) => ReactNode;
   align?: 'right';
   title?: string;
+  /** Value written to CSV (defaults to the sort value); false leaves the column out. */
+  csv?: ((row: T) => Cell) | false;
+  /** CSV column name (defaults to the header when it is text). */
+  csvHeader?: string;
 }
 
-export function DataTable<T>({ rows, columns, rowKey, initialSort, onRowClick, selectedKey, capped, caption }: {
+/** The rows of a table as a CSV table, using each column's export value. */
+export function tableCsv<T>(name: string, rows: T[], columns: Column<T>[]): CsvTable {
+  const cols = columns.filter((c) => c.csv !== false && (c.csv || c.sort));
+  return {
+    name,
+    columns: cols.map((c) => c.csvHeader ?? (typeof c.header === 'string' ? c.header : c.key)),
+    rows: rows.map((row) => cols.map((c) => (c.csv ? c.csv(row) : c.sort!(row)))),
+  };
+}
+
+export function DataTable<T>({ rows, columns, rowKey, initialSort, onRowClick, selectedKey, capped, caption, exportTitle, exportColumns }: {
   rows: T[];
   columns: Column<T>[];
   rowKey: (row: T) => string;
@@ -109,6 +126,10 @@ export function DataTable<T>({ rows, columns, rowKey, initialSort, onRowClick, s
   selectedKey?: string | null;
   capped?: boolean;
   caption?: string;
+  /** Adds a CSV export of every row (in the current order) under this title. */
+  exportTitle?: string;
+  /** Columns for the CSV, when it should hold more than is on screen. */
+  exportColumns?: Column<T>[];
 }) {
   const [sort, setSort] = useState(initialSort ?? null);
   const sorted = useMemo(() => {
@@ -126,6 +147,12 @@ export function DataTable<T>({ rows, columns, rowKey, initialSort, onRowClick, s
   }, [rows, columns, sort]);
 
   return (
+    <>
+    {exportTitle && (
+      <div className="table-toolbar">
+        <ExportButtons item={{ title: exportTitle, csv: () => [tableCsv(exportTitle, sorted, exportColumns ?? columns)] }} />
+      </div>
+    )}
     <div className={`table-wrap${capped ? ' capped' : ''}`}>
       <table className="data">
         {caption && <caption className="visually-hidden">{caption}</caption>}
@@ -168,6 +195,7 @@ export function DataTable<T>({ rows, columns, rowKey, initialSort, onRowClick, s
         </tbody>
       </table>
     </div>
+    </>
   );
 }
 
@@ -215,6 +243,11 @@ export function niceClassScale(lo: number, hi: number, steps: number[], limits: 
     return classScale(start, start + count * step, count);
   }
   return classScale(lo, hi);
+}
+
+/** The same legend for a PDF. */
+export function pdfScale(scale: ClassScale, format: (v: number) => string, title: string): PdfScale {
+  return { title, colors: scale.colors.map((c) => SEQUENTIAL[c]), breaks: scale.breaks.map(format) };
 }
 
 export function ScaleLegend({ scale, format, title, extras }: { scale: ClassScale; format: (v: number) => string; title: string; extras?: { label: string; color: string }[] }) {

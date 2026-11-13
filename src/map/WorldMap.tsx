@@ -3,7 +3,7 @@
  * what the classes mean. Geometry is converted to Path2D once per geodata and reused, so panning
  * and zooming only change the canvas transform.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode, type Ref } from 'react';
 import { mesh } from 'topojson-client';
 import type { GeometryCollection, GeometryObject } from 'topojson-specification';
 import type { Geo } from '../geo/geo';
@@ -14,6 +14,32 @@ export interface MapTarget {
   kind: 'region' | 'country';
   regionIdx: number;
   cc: string;
+  /** Key of the marker under the pointer, if any. */
+  marker?: string;
+}
+
+/** A pin drawn at a fixed screen size. */
+export interface MapMarker {
+  key: string;
+  lat: number;
+  lng: number;
+  cc: string;
+  /** CSS custom property name for the fill, e.g. '--series-1'. */
+  colorVar: string;
+  /** One or two characters drawn inside the pin when zoomed in. */
+  label?: string;
+}
+
+/** Grid cells (indices into the coverage grid) coloured by class, drawn over the regions. */
+export interface MapOverlay {
+  cells: ArrayLike<number>;
+  classes: ArrayLike<number>;
+  colorVars: string[];
+}
+
+export interface WorldMapHandle {
+  /** The current view drawn on a new canvas, `scale` times the on-screen size, optionally in light colours. */
+  toCanvas(options?: { scale?: number; light?: boolean }): HTMLCanvasElement | null;
 }
 
 export interface WorldMapProps {
@@ -34,6 +60,15 @@ export interface WorldMapProps {
   tooltip: (target: MapTarget) => ReactNode;
   onPick?: (target: MapTarget) => void;
   ariaLabel: string;
+  markers?: MapMarker[];
+  overlay?: MapOverlay | null;
+  /** A country to keep outlined. */
+  highlight?: string | null;
+  /** When `key` changes the view moves to fit `bbox` ([minX, minY, maxX, maxY] in normalised Mercator). */
+  focus?: { key: string; bbox: [number, number, number, number] } | null;
+  /** Draw a dot for countries too small to see. Default true. */
+  smallCountryMarkers?: boolean;
+  handle?: Ref<WorldMapHandle>;
 }
 
 type Props = { n: string; c: string };
@@ -144,7 +179,24 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 interface View { k: number; cx: number; cy: number }
 const HOME: View = { k: 1, cx: 0.5, cy: (WORLD_VIEW.top + WORLD_VIEW.bottom) / 2 };
 
-export function WorldMap({ geo, level, classes, colorVars, points, paint = 'coverage', tooltip, onPick, ariaLabel }: WorldMapProps) {
+function cellsPath(geo: Geo, cells: number[]): Path2D {
+  const path = new Path2D();
+  const { cols, cellDeg } = geo.grid;
+  for (const cell of cells) {
+    const row = Math.floor(cell / cols), col = cell % cols;
+    const south = -90 + row * cellDeg;
+    const y0 = mercatorY(south + cellDeg), y1 = mercatorY(south);
+    path.rect(col / cols - PAD, y0 - PAD, 1 / cols + 2 * PAD, y1 - y0 + 2 * PAD);
+  }
+  return path;
+}
+
+const markerRadius = (k: number): number => (k >= 2.5 ? 9 : 6);
+
+export function WorldMap({
+  geo, level, classes, colorVars, points, paint = 'coverage', tooltip, onPick, ariaLabel,
+  markers, overlay, highlight, focus, smallCountryMarkers = true, handle,
+}: WorldMapProps) {
   const [containerRef, width] = useWidth<HTMLDivElement>();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const layerRef = useRef<HTMLCanvasElement | null>(null);
@@ -175,6 +227,18 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
     return byClass;
   }, [geo, geometry, classes]);
 
+  const overlayBatches = useMemo(() => {
+    if (!overlay) return null;
+    const byClass = new Map<number, number[]>();
+    for (let i = 0; i < overlay.cells.length; i++) {
+      const c = overlay.classes[i];
+      let list = byClass.get(c);
+      if (!list) byClass.set(c, list = []);
+      list.push(overlay.cells[i]);
+    }
+    return [...byClass.entries()].map(([c, cells]) => ({ c, path: cellsPath(geo, cells) }));
+  }, [geo, overlay]);
+
   const scale = useCallback(() => Math.min(width, height / ASPECT) * view.current.k, [width, height]);
 
   const clampView = useCallback(() => {
@@ -186,40 +250,36 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
     v.cy = 2 * hh >= ASPECT ? HOME.cy : Math.max(WORLD_VIEW.top + hh, Math.min(WORLD_VIEW.bottom - hh, v.cy));
   }, [width, height]);
 
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current, container = containerRef.current;
-    if (!canvas || !container || width === 0) return;
+  /** Paints the map with the given view onto any canvas (the screen, or an export). */
+  const render = useCallback((canvas: HTMLCanvasElement, layerCanvas: HTMLCanvasElement, w: number, h: number, dpr: number, v: View, varsFrom: Element, active: MapTarget | null) => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
-    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(h * dpr);
     }
-    const chrome = readCssVars(container, CHROME_VARS);
-    const palette = readCssVars(container, colorVars);
-    const v = view.current;
-    const s = scale();
-    const ox = width / 2 - v.cx * s, oy = height / 2 - v.cy * s;
+    const chrome = readCssVars(varsFrom, CHROME_VARS);
+    const palette = readCssVars(varsFrom, [...colorVars, ...(overlay?.colorVars ?? []), ...(markers ?? []).map((m) => m.colorVar), '--surface']);
+    const s = Math.min(w, h / ASPECT) * v.k;
+    const ox = w / 2 - v.cx * s, oy = h / 2 - v.cy * s;
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = chrome['--map-water'];
-    ctx.fillRect(0, 0, width, height);
+    ctx.fillRect(0, 0, w, h);
 
     ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * ox, dpr * oy);
     ctx.fillStyle = chrome['--map-land'];
     ctx.fill(geometry.land, 'evenodd');
     if (paint === 'coverage') {
       // Colours go on a separate layer that is then cut down to the covered cells.
-      const layer = (layerRef.current ??= document.createElement('canvas'));
-      if (layer.width !== canvas.width || layer.height !== canvas.height) {
-        layer.width = canvas.width;
-        layer.height = canvas.height;
+      if (layerCanvas.width !== canvas.width || layerCanvas.height !== canvas.height) {
+        layerCanvas.width = canvas.width;
+        layerCanvas.height = canvas.height;
       }
-      const lc = layer.getContext('2d')!;
+      const lc = layerCanvas.getContext('2d')!;
       lc.setTransform(1, 0, 0, 1, 0, 0);
       lc.globalCompositeOperation = 'source-over';
-      lc.clearRect(0, 0, layer.width, layer.height);
+      lc.clearRect(0, 0, layerCanvas.width, layerCanvas.height);
       lc.setTransform(dpr * s, 0, 0, dpr * s, dpr * ox, dpr * oy);
       for (const [c, path] of batches) {
         if (c < 0) continue;
@@ -230,13 +290,19 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
       lc.fillStyle = '#000';
       lc.fill(coveragePath(geo, geometry));
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(layer, 0, 0);
+      ctx.drawImage(layerCanvas, 0, 0);
       ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * ox, dpr * oy);
     } else {
       for (const [c, path] of batches) {
         if (c < 0) continue;
         ctx.fillStyle = palette[colorVars[c]] || chrome['--map-land'];
         ctx.fill(path, 'evenodd');
+      }
+    }
+    if (overlay && overlayBatches) {
+      for (const { c, path } of overlayBatches) {
+        ctx.fillStyle = palette[overlay.colorVars[c]] || chrome['--map-land'];
+        ctx.fill(path);
       }
     }
     if (level === 'region' && v.k >= 2.2) {
@@ -248,29 +314,35 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
     ctx.strokeStyle = chrome['--map-line'];
     ctx.stroke(geometry.countryBorders);
 
-    const active = hover?.target;
-    if (active) {
+    ctx.lineJoin = 'round';
+    if (highlight) {
       ctx.lineWidth = 2 / s;
       ctx.strokeStyle = chrome['--ink'];
-      ctx.lineJoin = 'round';
+      ctx.stroke(outlineOf(geo, geometry, highlight));
+    }
+    if (active && !(highlight && active.kind === 'country' && active.cc === highlight)) {
+      ctx.lineWidth = 2 / s;
+      ctx.strokeStyle = chrome['--ink'];
       ctx.stroke(active.kind === 'country' ? outlineOf(geo, geometry, active.cc) : geometry.regionPaths[active.regionIdx]);
     }
 
     // Screen-space layers: dots and markers keep their size whatever the zoom.
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const markerBelow = Math.min(7, s * 0.005);
-    for (const c of geometry.countries) {
-      if (c.size * s >= markerBelow) continue;
-      const cls = classes[c.region] ?? -1;
-      const px = c.x * s + ox, py = c.y * s + oy;
-      if (px < -6 || py < -6 || px > width + 6 || py > height + 6) continue;
-      ctx.beginPath();
-      ctx.arc(px, py, 3.5, 0, 2 * Math.PI);
-      ctx.fillStyle = cls >= 0 ? palette[colorVars[cls]] || chrome['--map-land'] : chrome['--map-land'];
-      ctx.fill();
-      ctx.lineWidth = active && active.cc === c.cc ? 2 : 1;
-      ctx.strokeStyle = active && active.cc === c.cc ? chrome['--ink'] : chrome['--map-line'];
-      ctx.stroke();
+    if (smallCountryMarkers) {
+      const markerBelow = Math.min(7, s * 0.005);
+      for (const c of geometry.countries) {
+        if (c.size * s >= markerBelow) continue;
+        const cls = classes[c.region] ?? -1;
+        const px = c.x * s + ox, py = c.y * s + oy;
+        if (px < -6 || py < -6 || px > w + 6 || py > h + 6) continue;
+        ctx.beginPath();
+        ctx.arc(px, py, 3.5, 0, 2 * Math.PI);
+        ctx.fillStyle = cls >= 0 ? palette[colorVars[cls]] || chrome['--map-land'] : chrome['--map-land'];
+        ctx.fill();
+        ctx.lineWidth = active && active.cc === c.cc ? 2 : 1;
+        ctx.strokeStyle = active && active.cc === c.cc ? chrome['--ink'] : chrome['--map-line'];
+        ctx.stroke();
+      }
     }
     if (points && points.length > 0) {
       // Dots stay small on small maps, or a few thousand of them would hide everything else.
@@ -280,14 +352,69 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
       ctx.lineWidth = 0.75;
       for (const p of points) {
         const px = mercatorX(p.lng) * s + ox, py = mercatorY(p.lat) * s + oy;
-        if (px < -4 || py < -4 || px > width + 4 || py > height + 4) continue;
+        if (px < -4 || py < -4 || px > w + 4 || py > h + 4) continue;
         ctx.beginPath();
         ctx.arc(px, py, r, 0, 2 * Math.PI);
         ctx.fill();
         if (v.k >= 2.5) ctx.stroke();
       }
     }
-  }, [width, height, containerRef, colorVars, scale, batches, paint, geo, geometry, level, hover, classes, points]);
+    if (markers && markers.length > 0) {
+      const r = markerRadius(v.k);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `700 ${Math.round(r * 1.15)}px system-ui, -apple-system, "Segoe UI", sans-serif`;
+      // The hovered pin and the selected country's pins go on top.
+      const order = [...markers].sort((a, b) => Number(a.cc === highlight || a.key === active?.marker) - Number(b.cc === highlight || b.key === active?.marker));
+      for (const m of order) {
+        const px = mercatorX(m.lng) * s + ox, py = mercatorY(m.lat) * s + oy;
+        if (px < -r || py < -r || px > w + r || py > h + r) continue;
+        const big = m.key === active?.marker || m.cc === highlight;
+        // With a country selected, the other countries' pins step back.
+        const faded = !!highlight && m.cc !== highlight && m.key !== active?.marker;
+        const rr = big ? r + 2 : faded ? Math.min(r, 5) : r;
+        ctx.globalAlpha = faded ? 0.4 : 1;
+        ctx.beginPath();
+        ctx.arc(px, py, rr, 0, 2 * Math.PI);
+        ctx.fillStyle = palette[m.colorVar] || chrome['--ink'];
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = big ? chrome['--ink'] : palette['--surface'] || '#fff';
+        ctx.stroke();
+        if (m.label && rr >= 9) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(m.label, px, py + 0.5);
+        }
+      }
+      ctx.globalAlpha = 1;
+    }
+  }, [colorVars, overlay, overlayBatches, markers, geometry, paint, batches, geo, level, highlight, smallCountryMarkers, classes, points]);
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current, container = containerRef.current;
+    if (!canvas || !container || width === 0) return;
+    const layer = (layerRef.current ??= document.createElement('canvas'));
+    render(canvas, layer, width, height, Math.min(window.devicePixelRatio || 1, 2.5), view.current, container, hover?.target ?? null);
+  }, [render, width, height, containerRef, hover]);
+
+  useImperativeHandle(handle, () => ({
+    toCanvas({ scale: factor = 2, light = true } = {}) {
+      const container = containerRef.current;
+      if (!container || width === 0) return null;
+      // Colours come from a temporary element in the light theme, whatever the page shows.
+      const scope = document.createElement('div');
+      scope.className = light ? 'light-scope map' : 'map';
+      scope.style.cssText = 'position:absolute;left:-9999px;top:0;width:1px;height:1px';
+      (light ? document.body : container).appendChild(scope);
+      try {
+        const canvas = document.createElement('canvas');
+        render(canvas, document.createElement('canvas'), width, height, factor, view.current, scope, null);
+        return canvas;
+      } finally {
+        scope.remove();
+      }
+    },
+  }), [render, width, height, containerRef]);
 
   const schedule = useCallback(() => {
     cancelAnimationFrame(frame.current);
@@ -300,20 +427,45 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
     return () => cancelAnimationFrame(frame.current);
   }, [draw, clampView, themeVersion]);
 
+  const focusKey = focus?.key ?? null;
+  useEffect(() => {
+    if (!focus || width === 0) return;
+    const [x0, y0, x1, y1] = focus.bbox;
+    const base = Math.min(width, height / ASPECT);
+    const k = 0.8 * Math.min(width / Math.max(1e-6, (x1 - x0) * base), height / Math.max(1e-6, (y1 - y0) * base));
+    view.current = { k: Math.max(1, Math.min(MAX_ZOOM, k)), cx: (x0 + x1) / 2, cy: (y0 + y1) / 2 };
+    clampView();
+    schedule();
+    // Only when the focus itself changes, not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey, width === 0]);
+
   // ---- Hit testing ------------------------------------------------------------------------
   const targetAt = useCallback((px: number, py: number): MapTarget | null => {
     const v = view.current;
     const s = scale();
     const ox = width / 2 - v.cx * s, oy = height / 2 - v.cy * s;
-    const markerBelow = Math.min(7, s * 0.005);
-    for (const c of geometry.countries) {
-      if (c.size * s >= markerBelow) continue;
-      const dx = c.x * s + ox - px, dy = c.y * s + oy - py;
-      if (dx * dx + dy * dy <= 81) return { kind: level, regionIdx: c.region, cc: c.cc };
+    if (markers && markers.length > 0) {
+      const reach = (markerRadius(v.k) + 5) ** 2;
+      let best: MapMarker | null = null, bestD = reach;
+      for (const m of markers) {
+        const dx = mercatorX(m.lng) * s + ox - px, dy = mercatorY(m.lat) * s + oy - py;
+        const d = dx * dx + dy * dy;
+        if (d <= bestD) { bestD = d; best = m; }
+      }
+      if (best) return { kind: level, regionIdx: geo.countries.get(best.cc)?.regions[0] ?? -1, cc: best.cc, marker: best.key };
+    }
+    if (smallCountryMarkers) {
+      const markerBelow = Math.min(7, s * 0.005);
+      for (const c of geometry.countries) {
+        if (c.size * s >= markerBelow) continue;
+        const dx = c.x * s + ox - px, dy = c.y * s + oy - py;
+        if (dx * dx + dy * dy <= 81) return { kind: level, regionIdx: c.region, cc: c.cc };
+      }
     }
     const idx = geo.regionAt((px - ox) / s, (py - oy) / s);
     return idx >= 0 ? { kind: level, regionIdx: idx, cc: geo.regions[idx].cc } : null;
-  }, [geo, geometry, level, scale, width, height]);
+  }, [geo, geometry, level, scale, width, height, markers, smallCountryMarkers]);
 
   const zoomAt = useCallback((factor: number, px = width / 2, py = height / 2) => {
     const v = view.current;
@@ -405,7 +557,7 @@ export function WorldMap({ geo, level, classes, colorVars, points, paint = 'cove
     const target = targetAt(p.x, p.y);
     setHover((h) => {
       if (!target) return h ? null : h;
-      if (h && h.target.regionIdx === target.regionIdx && h.target.kind === target.kind && Math.abs(h.x - p.x) < 2 && Math.abs(h.y - p.y) < 2) return h;
+      if (h && h.target.regionIdx === target.regionIdx && h.target.kind === target.kind && h.target.marker === target.marker && Math.abs(h.x - p.x) < 2 && Math.abs(h.y - p.y) < 2) return h;
       return { target, x: p.x, y: p.y };
     });
   };
